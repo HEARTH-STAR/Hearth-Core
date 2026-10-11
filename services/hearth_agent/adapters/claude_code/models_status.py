@@ -33,17 +33,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from services.hearth_agent.adapters.claude_code.cli import claude_binary
 from services.hearth_agent.adapters.cli_status import (
     CliStatusError as ClaudeCodeStatusError,
 )
-from services.hearth_agent.adapters.cli_status import (
-    resolve_binary,
-    run_cli,
-)
+from services.hearth_agent.adapters.cli_status import run_cli
 from services.hearth_agent.registry.agent_registry import get_agent
 
-CLAUDE_BIN_ENV = "CLAUDE_CLI_PATH"
-DEFAULT_BIN = "claude"
 DEFAULT_TIMEOUT_SECONDS = 15.0
 
 
@@ -64,8 +60,7 @@ async def fetch_raw_status(timeout: float = DEFAULT_TIMEOUT_SECONDS) -> dict[str
     """Run `claude auth status --json` (with the jobs' env) and return the parsed JSON dict."""
     from services.hearth_agent.adapters.claude_code.adapter import ClaudeCodeAdapter
 
-    binary = resolve_binary(CLAUDE_BIN_ENV, DEFAULT_BIN)
-    result = await run_cli(binary, ("auth", "status", "--json"), timeout=timeout, label="claude",
+    result = await run_cli(claude_binary(), ("auth", "status", "--json"), timeout=timeout, label="claude",
                            env=ClaudeCodeAdapter({}).cli_env())
     out = result.stdout
     if result.returncode != 0:

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from services.hearth_agent.adapters.base import BaseAgentAdapter, HarnessHooks
+from services.hearth_agent.adapters.claude_code.cli import claude_binary
 from services.hearth_agent.adapters.claude_code.hooks import build_hooks, deny_prompts
 from services.hearth_agent.adapters.claude_code.mcp_config import (
     CLIENT_SERVER_NAME,
@@ -566,7 +567,7 @@ class ClaudeCodeAdapter(BaseAgentAdapter):
         })
 
     async def health(self) -> dict[str, Any]:
-        cli = self._cli_path() or self.commands.get("binary") or "claude"
+        cli = self._cli_path() or claude_binary()
         try:
             proc = await asyncio.create_subprocess_exec(
                 cli, "--version", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,

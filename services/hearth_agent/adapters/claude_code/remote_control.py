@@ -49,7 +49,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from services.hearth_agent.adapters.cli_status import resolve_binary
+from services.hearth_agent.adapters.claude_code.cli import claude_binary
 from services.hearth_agent.registry.settings import load_agent_capabilities
 from services.storage.layout import workspaces_dir
 from services.storage.paths import hearth_state_dir
@@ -326,7 +326,7 @@ def start(name: str | None = None) -> dict[str, Any]:
         label = (name or "").strip() or _default_name()
         try:
             ensure_gates_seeded()
-            binary = resolve_binary("CLAUDE_CLI_PATH", "claude")
+            binary = claude_binary()
             _cleanup_state()
             env = _child_env()
             # Args/paths pass via env so the label can't break the shell.

@@ -10,11 +10,13 @@
 
 ## Sibling repos (github.com/HEARTH-STAR, checked out side by side)
 
-- Hearth-frontend (`../Hearth-frontend`, :4310): the web app. Calls this API at its `HEARTH_CORE_URL`
-  (`/api/chat`, `/api/workspace/*`, `/health`).
+- Hearth-frontend (`../Hearth-frontend`, :4310): the web app. Each of its Spaces is a container running this
+  service; it calls `/api/chat`, `/api/workspace/*`, `/api/connectors/{github,claude-code}/*` and `/health` at the
+  port Docker published for the container's 5010.
 - Hearth-Core (this repo, :5010).
-- Hearth-backend (`../Hearth-backend`, :5020): spins up containers; its `ubuntu-26.04` template clones this
-  repo into `/workspace/hearth-core`.
+- Hearth-backend (`../Hearth-backend`, :5020): spins up containers. Its `space` template clones this repo's
+  `main` into `/workspace/hearth-core` and runs it on 5010 (published on loopback); each Space in the web app
+  is one such container, so a change here reaches spaces only once it is pushed.
 - Ports and URLs are documented in each repo's `.env.example`; keep them in step when one changes.
 
 ## Architecture conventions
@@ -25,6 +27,8 @@
 - The API diff engine is its own root-level package, `apidiff/` (`from apidiff import ...`), not under
   `services/`. CLI: `python -m apidiff.cli OLD NEW`.
 - Keep route handlers thin; logic lives in services.
+- `server.py` pins the proactor event loop on Windows (`event_loop()`): with reload, uvicorn picks the selector
+  loop, which cannot start subprocesses, and every gh, git and claude call would fail.
 - Every external command runs through `utils/commands` (`run` over an argv list, `safe_arg` for untrusted
   values). No `shell=True`, no command strings.
 
@@ -48,6 +52,17 @@
 - `ChatSpec.tools` are tools the web app runs itself, served as `mcp__client__<name>`. The caller posts each
   result to `POST /api/chat/{session}/tool-results` (`engine/chat_bridge.py`); `handoff` tools return an
   acknowledgement at once and the owner's decision arrives as the next turn.
+
+## Claude Code sign-in (`adapters/claude_code/login.py`)
+
+- The space's Claude account is set up from the web app: `/api/connectors/claude-code/{status, login/start,
+  login/code, login/poll, login/cancel, logout}` (adapter `routes.py`). Ported from xo-space's Connect Claude.
+- `start` runs `claude auth login --claudeai` under a PTY (echo off) and returns the authorize URL; `login/code`
+  types the `code#state` the owner pastes back. `invalid_code` is retryable. On success the CLI writes its own
+  `~/.claude/.credentials.json`, and `hasCompletedOnboarding` is set in `~/.claude.json`.
+- Needs a PTY, so it works inside a space (Linux) and refuses on Windows.
+- Every `claude` call (login, status, models, Remote Control, health) uses `cli.claude_binary()`:
+  `CLAUDE_CLI_PATH` → the SDK's bundled CLI → PATH, so a login lands in the CLI chat turns actually run.
 
 ## Security invariants (from the TDD — do not weaken)
 
@@ -73,6 +88,9 @@
   it out of all of them and removes the git identity and credential helper connecting wrote
   (quirq-ai/xo-space#197).
 - Sandboxes receive `RepoMirror.export_tree()` output: no `.git` remote, no credential.
+- The Claude credential lives only in the CLI's own store. The sign-in never logs, returns or echoes the code
+  or a token; it runs without `ANTHROPIC_API_KEY`/`ANTHROPIC_OAUTH_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN`, and
+  `status` reports account details only (`login.describe`).
 
 ## Testing
 

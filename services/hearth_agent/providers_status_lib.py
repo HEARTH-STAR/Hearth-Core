@@ -18,12 +18,10 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from services.hearth_agent.adapters.cli_status import resolve_binary
+from services.hearth_agent.adapters.claude_code.cli import claude_binary
 from services.hearth_agent.registry.settings import load_agent_capabilities
 from utils.commands import run
 
-CLAUDE_BIN_ENV = "CLAUDE_CLI_PATH"
-DEFAULT_CLAUDE_BIN = "claude"
 DEFAULT_TIMEOUT_SECONDS = 10.0
 
 
@@ -56,8 +54,7 @@ async def claude_auth_status(
     Pass the *same* env the agent subprocess uses (``Adapter.cli_env()``) so the
     status reflects the auth the CLI will actually resolve to.
     """
-    binary = resolve_binary(CLAUDE_BIN_ENV, DEFAULT_CLAUDE_BIN)
-    res = await run([binary, "auth", "status", "--json"], env=env, timeout=timeout, separate_stderr=True)
+    res = await run([claude_binary(), "auth", "status", "--json"], env=env, timeout=timeout, separate_stderr=True)
     if not res.ok:
         return {}
     try:
