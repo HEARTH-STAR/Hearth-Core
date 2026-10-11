@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from services.hearth_agent.adapters.base import HarnessHooks
-from services.hearth_agent.models import AgentResult, JobSpec
+from services.hearth_agent.engine.chat_bridge import ToolResultBridge
+from services.hearth_agent.models import AgentResult, ChatSpec, JobSpec
 from services.hearth_agent.registry.adapter_registry import get_adapter
 from services.hearth_agent.registry.agent_registry import get_active_agent
 from services.hearth_agent.registry.settings import load_agent_config
@@ -29,6 +30,14 @@ class AgentDispatcher:
 
     async def stream(self, job: JobSpec, workspace: Path, hooks: HarnessHooks) -> AsyncIterator[dict[str, Any]]:
         async for event in self.adapter.stream(job, workspace, hooks):
+            yield event
+
+    @property
+    def supports_chat(self) -> bool:
+        return self.adapter.supports_chat
+
+    async def chat(self, spec: ChatSpec, workspace: Path, bridge: ToolResultBridge) -> AsyncIterator[dict[str, Any]]:
+        async for event in self.adapter.chat(spec, workspace, bridge):
             yield event
 
     async def health(self) -> dict[str, Any]:

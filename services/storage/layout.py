@@ -7,6 +7,8 @@
       workspaces/   sandbox workspaces (one dir per job step)
       jobs/         per-job spec / result files
       audit/        daily JSONL audit files
+      workspace/    chat sessions' workspace, unless HEARTH_WORKSPACE_DIR points elsewhere
+                    (``/workspace`` in a space container); see ``services/storage/workspace.py``
 """
 
 from __future__ import annotations

@@ -32,8 +32,17 @@ def _deny(reason: str) -> dict[str, Any]:
                                    "permissionDecisionReason": reason}}
 
 
-def check_tool(name: str, args: dict[str, Any], policy: ToolPolicy, workspace: Path, mcp_server: str) -> Decision:
-    if name.startswith(f"mcp__{mcp_server}__") or name in READ_TOOLS:
+def check_tool(
+    name: str, args: dict[str, Any], policy: ToolPolicy, workspace: Path, mcp_server: str,
+    *, allowed: frozenset[str] | None = None,
+) -> Decision:
+    """``allowed``, when given, is the turn's built-in tool set (a chat turn's permissions); anything
+    outside it is denied even if the policy would let it through."""
+    if name.startswith(f"mcp__{mcp_server}__"):
+        return Decision.allow()
+    if allowed is not None and name not in allowed:
+        return Decision.deny(f"tool {name} is switched off for this conversation")
+    if name in READ_TOOLS:
         return Decision.allow()
     if name in EDIT_TOOLS:
         path = args.get("file_path") or args.get("notebook_path") or ""
@@ -43,12 +52,19 @@ def check_tool(name: str, args: dict[str, Any], policy: ToolPolicy, workspace: P
     return Decision.deny(f"tool {name} is not available to HEARTH jobs")
 
 
-def build_hooks(workspace: Path, policy: ToolPolicy, state: JobState, emit: Emit, *, mcp_server: str) -> dict:
+def build_hooks(
+    workspace: Path, policy: ToolPolicy, state: JobState, emit: Emit, *, mcp_server: str,
+    allowed: frozenset[str] | None = None, on_allow: Callable[[str, str | None], None] | None = None,
+) -> dict:
+    """``on_allow(tool_name, tool_use_id)`` runs for each allowed call just before it executes."""
+
     async def pre_tool_use(inp: dict[str, Any], tool_use_id: str | None, _ctx: Any) -> dict[str, Any]:
         name = inp.get("tool_name", "")
         args = inp.get("tool_input") or {}
-        d = check_tool(name, args, policy, workspace, mcp_server)
+        d = check_tool(name, args, policy, workspace, mcp_server, allowed=allowed)
         if d.allowed:
+            if on_allow is not None:
+                on_allow(name, tool_use_id)
             return {}
         state.policy_violations += 1
         await emit(se.policy_denied(name, tool_use_id, args, d.reason))

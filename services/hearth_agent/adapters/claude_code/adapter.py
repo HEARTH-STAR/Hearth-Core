@@ -12,13 +12,20 @@ from typing import Any
 
 from services.hearth_agent.adapters.base import BaseAgentAdapter, HarnessHooks
 from services.hearth_agent.adapters.claude_code.hooks import build_hooks, deny_prompts
-from services.hearth_agent.adapters.claude_code.mcp_config import server_name, session_mcp_servers
+from services.hearth_agent.adapters.claude_code.mcp_config import (
+    CLIENT_SERVER_NAME,
+    chat_mcp_servers,
+    server_name,
+    session_mcp_servers,
+)
 from services.hearth_agent.adapters.claude_code.mcp_tools import JobState
-from services.hearth_agent.adapters.claude_code.prompts import MIGRATOR_RULES, build_task_message
-from services.hearth_agent.adapters.claude_code.streaming import parse_message
+from services.hearth_agent.adapters.claude_code.prompts import MIGRATOR_RULES, build_chat_system, build_task_message
+from services.hearth_agent.adapters.claude_code.streaming import parse_message, parse_partial
 from services.hearth_agent.engine import sessions_io as _session_index
 from services.hearth_agent.engine import stream_events as se
-from services.hearth_agent.models import AgentResult, JobSpec, Usage
+from services.hearth_agent.engine.chat_bridge import ToolResultBridge
+from services.hearth_agent.models import AgentResult, ChatPermissions, ChatSpec, JobSpec, Usage
+from services.hearth_agent.policy import ToolPolicy
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +34,21 @@ _DEFAULT_MODEL = "claude-opus-5-5"
 _DEFAULT_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash"]
 _DEFAULT_DISALLOWED = ["WebFetch", "WebSearch", "Task"]
 _BACKEND = "claude_code"
+
+# A chat turn always gets the read-only tools; the owner's permissions add file edits and the shell.
+_CHAT_READ_TOOLS = ("Read", "Glob", "Grep")
+_CHAT_FILE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+_CHAT_SHELL_TOOLS = ("Bash",)
+
+
+def chat_tools(manifest_tools: list[str], permissions: ChatPermissions) -> list[str]:
+    """The manifest's tools a chat turn may use, in manifest order."""
+    wanted = {*_CHAT_READ_TOOLS}
+    if permissions.files:
+        wanted.update(_CHAT_FILE_TOOLS)
+    if permissions.shell:
+        wanted.update(_CHAT_SHELL_TOOLS)
+    return [name for name in manifest_tools if name in wanted]
 
 
 # ── Session index (ported from xo-space; one row per job) ─────────────────────
@@ -40,6 +62,18 @@ _native_map: dict[str, str] = {}
 
 def make_session_key(job_id: str) -> str:
     return job_id
+
+
+def make_chat_key(session: str) -> str:
+    """Index key for a web-app conversation; the prefix keeps it apart from job ids."""
+    return f"chat:{session}"
+
+
+def _mark_running(session_key: str) -> None:
+    row = _session_index.read_session_row(session_key)
+    if row:
+        row.update(status="running", updatedAt=_session_index.now_ms())
+        _session_index.write_session_row(session_key, row)
 
 
 def find_session_id_by_key(session_key: str) -> str | None:
@@ -147,7 +181,8 @@ def _roll_up(session_key: str, native_sid: str | None, raw_usage: dict, cost: fl
 
 
 class ClaudeCodeAdapter(BaseAgentAdapter):
-    """Claude Code, driven through the Claude Agent SDK, for one HEARTH job at a time.
+    """Claude Code, driven through the Claude Agent SDK, for one HEARTH job at a time, and for the
+    Hearth web app's chat turns (:meth:`chat`), which run under the same guardrails.
 
     Shape mirrors xo-space ``adapters/claude_code/adapter.py``. What HEARTH changes:
 
@@ -183,8 +218,11 @@ class ClaudeCodeAdapter(BaseAgentAdapter):
         return server_name(self.commands)
 
     def _model(self, job: JobSpec) -> str:
+        return self._model_for(job.model)
+
+    def _model_for(self, requested: str | None) -> str:
         model_cfg = self.commands.get("model") or {}
-        return job.model or self.config.get("model") or model_cfg.get("default") or _DEFAULT_MODEL
+        return requested or self.config.get("model") or model_cfg.get("default") or _DEFAULT_MODEL
 
     def _effort(self) -> str | None:
         return (self.commands.get("model") or {}).get("effort")
@@ -399,6 +437,133 @@ class ClaudeCodeAdapter(BaseAgentAdapter):
                    **({"session": resume_note} if resume_note else {})},
         )
         yield se.done(native_session_id, result.model_dump(mode="json"))
+
+    # ── Chat (the Hearth web app) ──────────────────────────────────────────────
+
+    supports_chat = True
+
+    def build_chat_options(
+        self, spec: ChatSpec, workspace: Path, bridge: ToolResultBridge, state: JobState, emit,
+        *, session_id: str | None = None, resume: str | None = None,
+    ):
+        """SDK options for one chat turn: the same guardrails as a job (policy hook, no prompts, no web,
+        no project settings), the tools the owner allowed, and the web app's tools."""
+        from claude_agent_sdk import ClaudeAgentOptions
+
+        tools = chat_tools(self._flags.get("tools") or _DEFAULT_TOOLS, spec.permissions)
+        client_prefix = f"mcp__{CLIENT_SERVER_NAME}__"
+
+        def on_allow(name: str, tool_use_id: str | None) -> None:
+            if name.startswith(client_prefix):
+                bridge.expect(name[len(client_prefix):], tool_use_id)
+
+        return ClaudeAgentOptions(
+            cwd=str(workspace),
+            model=self._model_for(spec.model),
+            effort=self._effort(),  # type: ignore[arg-type]
+            system_prompt={"type": "preset", "preset": "claude_code", "append": build_chat_system(spec.system)},
+            tools=tools,
+            allowed_tools=[*tools, *([client_prefix + "*"] if spec.tools else [])],
+            disallowed_tools=list(self._flags.get("disallowed_tools") or _DEFAULT_DISALLOWED),
+            mcp_servers=chat_mcp_servers(spec, bridge),
+            session_id=session_id,
+            resume=resume,
+            hooks=build_hooks(workspace, ToolPolicy(), state, emit, mcp_server=CLIENT_SERVER_NAME,
+                              allowed=frozenset(tools), on_allow=on_allow),
+            can_use_tool=deny_prompts,
+            permission_mode=self._flags.get("permission_mode", "default"),
+            setting_sources=list(self._flags.get("setting_sources", [])),
+            max_turns=spec.limits.max_turns,
+            # Text streams to the owner as it is written (parse_partial); jobs have no live reader.
+            include_partial_messages=True,
+            env=self.cli_env(),
+            cli_path=self._cli_path(),
+        )
+
+    async def chat(self, spec: ChatSpec, workspace: Path, bridge: ToolResultBridge) -> AsyncIterator[dict[str, Any]]:
+        import claude_agent_sdk
+
+        queue: asyncio.Queue[dict | None] = asyncio.Queue()
+        state = JobState()
+        usage = Usage()
+        raw_usage: dict = {}
+        native_session_id: str | None = None
+        failed = False
+
+        async def emit(event: dict) -> None:
+            await queue.put(event)
+
+        # Continue the conversation's session when its transcript is reachable from this folder (it is
+        # not after the assistant's folder changed); otherwise start a new one with a pre-allocated id.
+        key = make_chat_key(spec.session)
+        previous = get_native_session_id(key)
+        if previous and self._transcript_available(previous, workspace):
+            session_id, resume = None, previous
+            _mark_running(key)
+        else:
+            session_id, resume = str(uuid.uuid4()), None
+            write_preliminary_entry(key, key, str(workspace), session_id, model=self._model_for(spec.model))
+
+        options = self.build_chat_options(spec, workspace, bridge, state, emit, session_id=session_id, resume=resume)
+
+        async def prompts():
+            yield {"type": "user", "message": {"role": "user", "content": spec.message}}
+
+        async def produce() -> None:
+            nonlocal native_session_id
+            try:
+                async for msg in claude_agent_sdk.query(prompt=prompts(), options=options):
+                    if isinstance(msg, claude_agent_sdk.AssistantMessage):
+                        usage.steps += 1
+                    for event in [*parse_partial(msg), *parse_message(msg)]:
+                        if event["type"] == se.SESSION_ID:
+                            native_session_id = event["session_id"]
+                            _patch_native_session_id(key, native_session_id)
+                        elif event["type"] == se.RESULT:
+                            u = event.get("usage") or {}
+                            raw_usage.clear()
+                            raw_usage.update(u)
+                            usage.input_tokens = int(u.get("input_tokens", 0)) + int(u.get("cache_read_input_tokens", 0))
+                            usage.output_tokens = int(u.get("output_tokens", 0))
+                            usage.cost_usd = event.get("total_cost_usd")
+                            usage.steps = event.get("num_turns") or usage.steps
+                            native_session_id = event.get("session_id") or native_session_id
+                        await emit(event)
+            except Exception as exc:  # SDK / CLI failure: report it on the stream, never raise into the route
+                log.exception("claude code chat turn failed")
+                await emit(se.error(f"{type(exc).__name__}: {exc}"))
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(produce())
+        timed_out = False
+        completed = False  # False only when the caller stopped consuming the stream early
+        try:
+            async with asyncio.timeout(spec.limits.wall_clock_seconds):
+                while (event := await queue.get()) is not None:
+                    failed = failed or event.get("type") == se.ERROR
+                    yield event
+            completed = True
+        except TimeoutError:
+            timed_out = completed = True
+            yield se.error(f"the turn reached its {spec.limits.wall_clock_seconds} second limit and was stopped")
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            if timed_out or usage.steps >= spec.limits.max_turns:
+                status = "budget_exhausted"
+            elif not completed:
+                status = "cancelled"
+            else:
+                status = "error" if failed else "completed"
+            _roll_up(key, native_session_id, raw_usage, usage.cost_usd, usage.steps or None, status)
+        yield se.done(native_session_id, {
+            "session": spec.session,
+            "status": status,
+            "usage": usage.model_dump(mode="json"),
+            "policy_violations": state.policy_violations,
+        })
 
     async def health(self) -> dict[str, Any]:
         cli = self._cli_path() or self.commands.get("binary") or "claude"

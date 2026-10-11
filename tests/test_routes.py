@@ -1,4 +1,5 @@
 import os
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -44,3 +45,26 @@ class RouteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EventLoopTests(unittest.TestCase):
+    def test_windows_keeps_a_loop_that_can_start_subprocesses(self):
+        from server import event_loop
+
+        self.assertEqual(event_loop("linux"), "auto")
+        self.assertEqual(event_loop("win32"), "asyncio:ProactorEventLoop")
+
+    @unittest.skipUnless(sys.platform == "win32", "the proactor loop exists only on Windows")
+    def test_uvicorn_builds_the_proactor_loop_even_with_reload(self):
+        import asyncio
+
+        import uvicorn
+
+        from server import event_loop
+
+        config = uvicorn.Config("server:app", reload=True, loop=event_loop())
+        loop = config.get_loop_factory()()
+        try:
+            self.assertIsInstance(loop, asyncio.ProactorEventLoop)
+        finally:
+            loop.close()

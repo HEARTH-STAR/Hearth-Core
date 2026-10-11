@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from services.hearth_agent.models import AgentResult, JobSpec, ValidationResult
+from services.hearth_agent.engine.chat_bridge import ToolResultBridge
+from services.hearth_agent.models import AgentResult, ChatSpec, JobSpec, ValidationResult
 from services.hearth_agent.policy import ToolPolicy
 
 # Repo root, resolved from this file so manifest lookups are independent of the
@@ -79,6 +80,18 @@ class BaseAgentAdapter(ABC):
             result = AgentResult(job_id=job.job_id, intelligence=self.adapter_name, status="error",
                                  summary="adapter ended without a done event")
         return result
+
+    supports_chat: bool = False
+
+    def chat(self, spec: ChatSpec, workspace: Path, bridge: ToolResultBridge) -> AsyncIterator[dict[str, Any]]:
+        """One chat turn from the Hearth web app (set ``supports_chat`` when implemented).
+
+        Same event vocabulary as :meth:`stream`, run in ``workspace`` with the owner's permissions
+        (``spec.permissions``) and the caller's tools (``spec.tools``, answered through ``bridge``).
+        Turns with the same ``spec.session`` continue one agent session. Ends with exactly one
+        ``{"done": True, "native_session_id", "result"}``.
+        """
+        raise NotImplementedError(f"{self.adapter_name} does not support chat")
 
     async def setup(self) -> bool:
         """One-time credential or gateway setup. Return True when ready."""

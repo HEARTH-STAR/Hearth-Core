@@ -2,7 +2,8 @@
 HEARTH's domain tools, served to Claude Code from an in-process MCP server.
 
 ``mcp_config.py`` wraps these tools in the session's in-process MCP server.
-Tool names are listed in ``manifest.json`` → ``mcp.tools``.
+Tool names are listed in ``manifest.json`` → ``mcp.tools``. Chat turns get a
+second, per-turn set instead: the tools the Hearth web app runs itself.
 
 ``finish`` is gated: it is accepted only when the harness's independent
 validation passes (TDD §3 items 3-4), at most ``limits.max_validation_rounds``.
@@ -19,7 +20,8 @@ from claude_agent_sdk import SdkMcpTool, tool
 from services.hearth_agent.adapters.base import HarnessHooks
 from services.hearth_agent.adapters.claude_code.prompts import build_fixup_message
 from services.hearth_agent.engine import stream_events as se
-from services.hearth_agent.models import JobSpec, ValidationResult
+from services.hearth_agent.engine.chat_bridge import ToolResultBridge
+from services.hearth_agent.models import ChatTool, JobSpec, ValidationResult
 
 Emit = Callable[[dict], Awaitable[None]]
 
@@ -85,4 +87,30 @@ def build_domain_tools(job: JobSpec, hooks: HarnessHooks, state: JobState, emit:
         return _text(build_fixup_message(v), error=True)
 
     return [get_change_record, get_impact_report, run_validation, finish]
+
+
+HANDOFF_ACK = (
+    "Shown to the owner in the Hearth web app. Stop here and end your turn without calling more tools; "
+    "their decision arrives as the next message."
+)
+
+
+def build_client_tools(tools: list[ChatTool], bridge: ToolResultBridge) -> list[SdkMcpTool]:
+    """A chat turn's caller-run tools (``ChatSpec.tools``). The web app runs each call and posts the result
+    back through the bridge; ``handoff`` tools are acknowledged at once because the owner answers later."""
+
+    def make(spec: ChatTool) -> SdkMcpTool:
+        @tool(spec.name, spec.description, spec.input_schema)
+        async def call(_: dict[str, Any]) -> dict[str, Any]:
+            if spec.handoff:
+                return _text(HANDOFF_ACK)
+            tool_use_id = bridge.take(spec.name)
+            if tool_use_id is None:
+                return _text(f"{spec.name} could not be matched to its call; try again.", error=True)
+            output, is_error = await bridge.wait(tool_use_id)
+            return _text(output, error=is_error)
+
+        return call
+
+    return [make(spec) for spec in tools]
 

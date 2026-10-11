@@ -6,6 +6,7 @@ from typing import Any
 from claude_agent_sdk import (
     AssistantMessage,
     ResultMessage,
+    StreamEvent,
     SystemMessage,
     TextBlock,
     ThinkingBlock,
@@ -60,6 +61,27 @@ def parse_message(msg: Any) -> list[dict]:
 
     # UserMessage (tool results going back to the agent; captured by the PostToolUse
     # hook instead), rate-limit and stream events: not part of the record here.
+    return []
+
+
+def parse_partial(msg: Any) -> list[dict]:
+    """Live deltas from a ``StreamEvent`` (``include_partial_messages``, chat turns only).
+
+    Text arrives as partial tokens and the start of a thinking or tool block as a partial label;
+    the complete message still follows through :func:`parse_message`, whose full token is the
+    authoritative text. Same shape as :func:`parse_stream_line`'s deltas. Subagent events are skipped.
+    """
+    if not isinstance(msg, StreamEvent) or msg.parent_tool_use_id:
+        return []
+    event = msg.event or {}
+    if event.get("type") == "content_block_delta":
+        delta = event.get("delta") or {}
+        if delta.get("type") == "text_delta" and delta.get("text"):
+            return [se.token(delta["text"], partial=True)]
+        return []
+    if event.get("type") == "content_block_start":
+        act = _block_activity(event.get("content_block") or {}, partial=True)
+        return [act] if act else []
     return []
 
 

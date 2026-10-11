@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -72,6 +73,13 @@ async def health() -> dict:
     return {"ok": True, "agent": get_active_agent().name}
 
 
+def event_loop(platform: str = sys.platform) -> str:
+    """uvicorn's ``loop`` setting. On Windows uvicorn picks the selector loop whenever it runs a
+    reloader (``./hearth-core.sh dev``), and that loop cannot start subprocesses, so every gh, git
+    and claude call would fail. The proactor loop can; elsewhere uvicorn's own choice stands."""
+    return "asyncio:ProactorEventLoop" if platform == "win32" else "auto"
+
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -81,4 +89,5 @@ if __name__ == "__main__":
         host=os.getenv("HOST", "127.0.0.1"),
         port=int(os.getenv("PORT", "5010")),
         reload=os.getenv("UVICORN_RELOAD", "false").lower() == "true",
+        loop=event_loop(),
     )

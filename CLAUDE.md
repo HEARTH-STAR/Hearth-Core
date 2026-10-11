@@ -4,9 +4,18 @@
 
 - FastAPI service that runs inside each HEARTH space (one Docker container on the customer's machine).
 - Holds three things: the GitHub connector (gh CLI), the API diff engine, and the Claude Code adapter.
-- Hearth-backend's engine services (Engine API, Orchestrator, Sandbox Runner, PR Service) import these
-  modules and call this API. Product docs: `../HEARTH_PRD.pdf`, `../HEARTH_TDD.pdf`.
+- Product docs: `../HEARTH_PRD.pdf`, `../HEARTH_TDD.pdf` (their engine services in Hearth-backend are not
+  built; Hearth-backend only spins up containers today).
 - Claude Code is the only intelligence. There is no OpenCode fork; do not add one.
+
+## Sibling repos (github.com/HEARTH-STAR, checked out side by side)
+
+- Hearth-frontend (`../Hearth-frontend`, :4310): the web app. Calls this API at its `HEARTH_CORE_URL`
+  (`/api/chat`, `/api/workspace/*`, `/health`).
+- Hearth-Core (this repo, :5010).
+- Hearth-backend (`../Hearth-backend`, :5020): spins up containers; its `ubuntu-26.04` template clones this
+  repo into `/workspace/hearth-core`.
+- Ports and URLs are documented in each repo's `.env.example`; keep them in step when one changes.
 
 ## Architecture conventions
 
@@ -26,7 +35,19 @@
 - Agent-specific code lives only in `config/agents/<name>/` and `services/hearth_agent/adapters/<name>/`.
   `adapters/loader.py` (`load_capability` / `try_load_capability`) is the one seam to reach it.
 - Every adapter's `stream()` speaks `services/hearth_agent/engine/stream_events.py` and ends with exactly
-  one `{"done": True, "native_session_id", "result"}`.
+  one `{"done": True, "native_session_id", "result"}`. So does `chat()`, for adapters with `supports_chat`.
+
+## Chat (the Hearth web app, `../Hearth-frontend`)
+
+- `POST /api/chat` runs one turn of a `ChatSpec` and streams the events as SSE; turns with the same
+  `session` continue one Claude Code session (index key `chat:<session>`). One turn per session at a time.
+- The turn runs in `ChatSpec.directory` under the workspace root (`services/storage/workspace.py`,
+  `HEARTH_WORKSPACE_DIR`). `GET /api/workspace/files` and `GET /api/workspace/file` are read-only views of it.
+- `ChatSpec.permissions` picks the built-in tools (reads always; `files` adds edits, `shell` adds Bash), and
+  the PreToolUse hook denies anything outside that set on top of the job policy.
+- `ChatSpec.tools` are tools the web app runs itself, served as `mcp__client__<name>`. The caller posts each
+  result to `POST /api/chat/{session}/tool-results` (`engine/chat_bridge.py`); `handoff` tools return an
+  acknowledgement at once and the owner's decision arrives as the next turn.
 
 ## Security invariants (from the TDD — do not weaken)
 
@@ -36,6 +57,9 @@
   tool call. Edits outside the Impact Report scope, CI config, secrets and `.git/` are denied; network
   tools, `git push/remote/fetch`, `gh`, `sudo` are denied.
 - `finish` is accepted only after `HarnessHooks.validate_candidate()` passes.
+- Chat turns keep every job guardrail (policy hook, `deny_prompts`, no web tools, `setting_sources: []`).
+  Workspace paths from callers go through `services/storage/workspace.resolve`, which refuses absolute paths,
+  `..` and symlinks out of the root.
 - Remote Control (`adapters/claude_code/remote_control.py`) stays off unless an operator sets
   `remote_control.enabled: true` in `config/agents/claude_code/capabilities.json`: it lets claude.ai drive a
   Claude Code session in the space outside the sandbox and policy. `start()` refuses (route: 403) otherwise.

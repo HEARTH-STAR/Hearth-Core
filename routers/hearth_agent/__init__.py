@@ -13,11 +13,13 @@ from services.hearth_agent.adapters.loader import try_load_capability
 
 from .agents import router as agents_router
 from .apidiff import router as apidiff_router
+from .chat import router as chat_router
 from .connectors.github_cli import router as github_cli_router
 from .connectors.github_pat import router as github_pat_router
 from .models import router as models_router
 from .sessions import router as sessions_router
 from .usage import router as usage_router
+from .workspace import router as workspace_router
 
 
 def _active_agent_routes() -> list[APIRouter]:
@@ -29,6 +31,8 @@ def _active_agent_routes() -> list[APIRouter]:
 
 all_routers: list[APIRouter] = [
     sessions_router,
+    chat_router,
+    workspace_router,
     agents_router,
     models_router,
     usage_router,

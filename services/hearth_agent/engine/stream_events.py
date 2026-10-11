@@ -22,7 +22,11 @@ event ``type``          meaning
 
 The stream ends with exactly one ``{"done": True, "native_session_id", "result"}``.
 Audit events go to the job's ``events.jsonl``; a live UI stream may forward only
-``token`` / ``model-loading`` / ``error`` / ``validation``.
+``token`` / ``model-loading`` / ``error`` / ``validation``. The chat stream
+(``POST /api/chat``) is the exception: it goes to the space owner's own web app,
+which shows every tool call and its output, so it carries the audit events too.
+Chat text also streams as it is written: ``partial`` tokens, then one full token
+per text block that is the authoritative text.
 """
 
 from __future__ import annotations

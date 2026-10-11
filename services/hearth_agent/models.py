@@ -135,6 +135,46 @@ class JobSpec(BaseModel):
     resume_job_id: str | None = None  # the earlier job on this branch whose agent session a revise continues
 
 
+class ChatTool(BaseModel):
+    """A tool the caller (the Hearth web app) runs itself, offered to the agent for one chat turn.
+
+    ``handoff`` tools hand a decision to the owner (e.g. "review this draft"): the agent gets an
+    acknowledgement at once and the owner's answer arrives as the next chat message. Other tools
+    block until the caller posts the result to ``POST /api/chat/{session}/tool-results``.
+    """
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    description: str = Field(max_length=2000)
+    input_schema: dict[str, Any] = Field(default_factory=lambda: {"type": "object", "properties": {}})
+    handoff: bool = False
+
+
+class ChatPermissions(BaseModel):
+    """What the owner lets the agent do on top of reading files."""
+
+    files: bool = False  # create and edit files
+    shell: bool = False  # run commands
+
+
+class ChatLimits(BaseModel):
+    max_turns: int = Field(30, ge=1, le=200)
+    wall_clock_seconds: int = Field(15 * 60, ge=10, le=3600)
+    tool_result_timeout_seconds: int = Field(120, ge=1, le=900)
+
+
+class ChatSpec(BaseModel):
+    """One chat turn from the Hearth web app. Turns with the same ``session`` continue one agent session."""
+
+    session: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    message: str = Field(min_length=1, max_length=100_000)
+    system: str = Field("", max_length=40_000)  # persona and context, appended to the agent's rules
+    directory: str = Field("", max_length=512)  # working folder, relative to the workspace root
+    model: str | None = Field(None, max_length=100)
+    permissions: ChatPermissions = Field(default_factory=ChatPermissions)
+    tools: list[ChatTool] = Field(default_factory=list, max_length=32)
+    limits: ChatLimits = Field(default_factory=ChatLimits)
+
+
 class Usage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
