@@ -23,7 +23,7 @@ class RouteTests(unittest.TestCase):
     def test_health_and_agents(self):
         self.assertEqual(self.client.get("/health").json()["agent"], "claude_code")
         runtime = self.client.get("/api/agents/runtime").json()
-        self.assertEqual((runtime["active"], runtime["adapters"]), ("claude_code", ["claude_code"]))
+        self.assertEqual((runtime["active"], runtime["adapters"]), ("claude_code", ["antigravity", "claude_code", "cursor"]))
         agents = self.client.get("/api/agents").json()
         self.assertEqual([a["name"] for a in agents], ["migrator"])
         caps = self.client.get("/api/agents/capabilities").json()

@@ -17,7 +17,6 @@
 #       HEARTH_SOURCE_REPO=<git url> bash install.sh
 #
 # Options:
-#   --dev        also install requirements-dev.txt (pytest, ruff)
 #   --no-start   set everything up, then exit instead of starting the server
 #   -h, --help   show this help
 #
@@ -41,7 +40,6 @@ LAUNCH_DIR="$PWD"
 PYTHON_VERSION="${HEARTH_PYTHON_VERSION:-3.12}"
 UV_INSTALL_URL="https://astral.sh/uv/install.sh"
 
-INSTALL_DEV=0
 START_SERVER=1
 
 # Set by resolve_repo_dir, once we know whether we are running from a
@@ -67,7 +65,6 @@ usage() {
 parse_args() {
     while [ $# -gt 0 ]; do
         case "$1" in
-            --dev) INSTALL_DEV=1 ;;
             --no-start) START_SERVER=0 ;;
             -h|--help) usage; exit 0 ;;
             *) fail "Unknown option: $1 (see --help)" ;;
@@ -169,7 +166,6 @@ sync_dependencies() {
     fi
 
     local requirements="${REPO_DIR}/requirements.txt"
-    [ "$INSTALL_DEV" -eq 0 ] || requirements="${REPO_DIR}/requirements-dev.txt"
     printf 'Installing dependencies from %s...\n' "${requirements##*/}"
     uv pip install --quiet --python "$VENV_PYTHON" --requirement "$requirements" ||
         fail "Could not install the dependencies in ${requirements##*/}."

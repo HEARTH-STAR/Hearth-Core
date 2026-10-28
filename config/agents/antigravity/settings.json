@@ -1,0 +1,6 @@
+{
+  "cli_path_env": "AGY_CLI_PATH",
+  "model_env": "HEARTH_ANTIGRAVITY_MODEL",
+  "workspaces_root": "~/.hearth/workspaces",
+  "timeout": 2700
+}

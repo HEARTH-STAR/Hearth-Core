@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # hearth-core.sh — run Hearth-Core locally.
 #
-#   ./hearth-core.sh install   ./install.sh --dev --no-start (venv + dev deps, no server)
+#   ./hearth-core.sh install   ./install.sh --no-start (venv + deps, no server)
 #   ./hearth-core.sh dev       run the API with auto-reload
 #   ./hearth-core.sh test      run the unittest gate
 #
@@ -14,7 +14,7 @@ PY=venv/bin/python
 
 case "${1:-}" in
   install)
-    exec ./install.sh --dev --no-start
+    exec ./install.sh --no-start
     ;;
   dev)
     UVICORN_RELOAD=true exec "$PY" server.py

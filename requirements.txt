@@ -5,3 +5,5 @@ python-dotenv>=1.0.0
 httpx>=0.26.0
 PyYAML>=6.0
 claude-agent-sdk>=0.2.164
+pytest>=8.4,<9
+ruff>=0.6

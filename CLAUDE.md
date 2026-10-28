@@ -3,10 +3,11 @@
 ## Project overview
 
 - FastAPI service that runs inside each HEARTH space (one Docker container on the customer's machine).
-- Holds three things: the GitHub connector (gh CLI), the API diff engine, and the Claude Code adapter.
+- Holds three things: the GitHub connector (gh CLI), the API diff engine, and the agent adapters.
 - Product docs: `../HEARTH_PRD.pdf`, `../HEARTH_TDD.pdf` (their engine services in Hearth-backend are not
   built; Hearth-backend only spins up containers today).
-- Claude Code is the only intelligence. There is no OpenCode fork; do not add one.
+- Three intelligences: Claude Code (`claude_code`, the default), Cursor's agent CLI (`cursor`) and Google
+  Antigravity's CLI (`antigravity`, `agy`), one active per space (`AGENT_NAME`). There is no OpenCode fork; do not add one.
 
 ## Sibling repos (github.com/HEARTH-STAR, checked out side by side)
 
@@ -35,7 +36,9 @@
 ## Agent-modular architecture
 
 - Core never names a specific agent. The active agent comes from `config/agents/<name>/manifest.json`
-  via `services/hearth_agent/registry/agent_registry.py` (`AGENT_NAME` → `DEFAULT_AGENT` → sole manifest).
+  via `services/hearth_agent/registry/agent_registry.py` (`AGENT_NAME` → `DEFAULT_AGENT` → sole manifest →
+  the one manifest with `"default": true`, which is claude_code's). Spaces set no `AGENT_NAME`, so keep
+  exactly one manifest marked default or every space fails at boot.
 - Agent-specific code lives only in `config/agents/<name>/` and `services/hearth_agent/adapters/<name>/`.
   `adapters/loader.py` (`load_capability` / `try_load_capability`) is the one seam to reach it.
 - Every adapter's `stream()` speaks `services/hearth_agent/engine/stream_events.py` and ends with exactly
@@ -64,6 +67,40 @@
 - Every `claude` call (login, status, models, Remote Control, health) uses `cli.claude_binary()`:
   `CLAUDE_CLI_PATH` → the SDK's bundled CLI → PATH, so a login lands in the CLI chat turns actually run.
 
+## Cursor (`adapters/cursor/`)
+
+- Runs `cursor-agent -p --output-format stream-json` per turn (`cli.cursor_binary()`: `CURSOR_CLI_PATH` →
+  `cursor-agent` on PATH → `~/.local/bin`). Package mirrors `claude_code/` module for module; `mcp_server.py`
+  is the one extra.
+- No system-prompt flag: the rules (`prompts.py`) travel in the prompt, which is one argv string (≤120 KB;
+  `build_turn_prompt` trims the caller's context first).
+- No HEARTH tools: the Change Record and Impact Report are inline, and the finish gate runs when a turn ends —
+  `validate_candidate()`, then on failure a fix-up turn resuming the same chat (`--resume`), up to
+  `max_validation_rounds`. The agent's summary ends with a "Needs human attention:" list.
+- Web-app tools (`ChatSpec.tools`) reach Cursor as MCP server `client`: `mcp_server.py` (stdlib-only stdio
+  JSON-RPC) relays each call over a per-turn loopback socket with a random token to `mcp_tools.ClientToolRelay`,
+  which emits the `tool-call` event and waits on the `ToolResultBridge`.
+- Cursor reports no tokens or cost: `Usage` has steps only, and `usage.py` serves runs from the index.
+- Sign-in: `/api/connectors/cursor/{status, login/start, login/poll, login/cancel, logout}` (`login.py`) —
+  `cursor-agent login` on pipes with `NO_OPEN_BROWSER=1`; the owner opens the link, no code to paste.
+  `CURSOR_API_KEY` also works. Remote Control is not supported (start answers 403).
+
+## Antigravity (`adapters/antigravity/`)
+
+- Runs `agy -p <prompt> --model <name> --add-dir <workspace> --log-file <run log>` per turn (`cli.agy_binary()`:
+  `AGY_CLI_PATH` → PATH → `~/.local/bin/agy`). Shape follows xo-space's antigravity adapter. agy ignores its cwd;
+  `--add-dir` pins the workspace. `--model` takes only names from agy's catalog (manifest `model.allowed`).
+- No JSON output: the conversation id comes from the run's `--log-file` (never agy's caches), the run's
+  `brain/<id>/.system_generated/logs/transcript_full.jsonl` is tailed for progress and `tool-call` events, and its
+  last tool-less `PLANNER_RESPONSE` is the reply. Tokens are agy's own client-side estimates from
+  `conversations/<id>.db` (`tokens.py`, ported); no cost.
+- Same finish gate as Cursor (fix-up turns continue the conversation with `--conversation`). Rules travel in the
+  prompt (`prompts.py`). The web app's tools (`ChatSpec.tools`) are not offered to agy.
+- Sign-in: `/api/connectors/antigravity/{status, login/start, login/code, login/poll, login/cancel, logout}`
+  (`login.py`): agy has no login command, so a throwaway `agy -p` under a PTY (in an empty folder, under a
+  read-only HEARTH policy) prints the Google link and takes the pasted code; success is agy's token file becoming
+  usable. Logout removes that file. Remote Control is not supported.
+
 ## Security invariants (from the TDD — do not weaken)
 
 - Claude Code never runs with permissions bypassed. `manifest.json` `flags.dangerously_skip_permissions`
@@ -72,6 +109,22 @@
   tool call. Edits outside the Impact Report scope, CI config, secrets and `.git/` are denied; network
   tools, `git push/remote/fetch`, `gh`, `sudo` are denied.
 - `finish` is accepted only after `HarnessHooks.validate_candidate()` passes.
+- Cursor (`adapters/cursor/hooks.py`): the same `ToolPolicy`, applied as Cursor permission rules written to the
+  workspace's `.cursor/cli.json` for the run (deny wins, even under `--force`) and as a check of every
+  `tool_call` on the stream; a forbidden call that *ran* kills the turn (job status `policy_violation`).
+  `--sandbox enabled` always (`flags.sandbox` must stay `"enabled"`); `--force` only on turns that may edit
+  (`flags.force`: `"edit_turns"` or `"never"`); the adapter refuses other values. For a run, `mcp_config.
+  project_config` sets the workspace's own `.cursor/{cli,mcp,hooks}.json` aside and restores them after,
+  refuses a symlinked `.cursor`, and the agent may never write `.cursor/**`.
+- Antigravity (`adapters/antigravity/hooks.py`, `policy_hook.py`): never `--dangerously-skip-permissions`
+  (`flags.dangerously_skip_permissions` must stay `false`; it also switches agy's hooks off). HEARTH's
+  `ToolPolicy` runs in agy's `PreToolUse` hook, registered in `~/.gemini/config/hooks.json`: per run the adapter
+  writes the policy under `$HEARTH_STATE_DIR/antigravity/policies/` keyed by workspace, the hook answers
+  `allow`/`deny` (unknown tools, web tools and subagents are denied; it fails closed), and denials go to the
+  audit stream. agy's `toolPermission` is set to `always-proceed` so calls the hook allows are not auto-denied
+  in headless mode. The workspace's own `.agents/hooks.json` is set aside for the run. Workspaces with no HEARTH
+  policy get `ask` (agy's own rules). The hook path and headless behaviour come from agy's docs and bug reports,
+  not a live check: confirm them on the agy version a space ships.
 - Chat turns keep every job guardrail (policy hook, `deny_prompts`, no web tools, `setting_sources: []`).
   Workspace paths from callers go through `services/storage/workspace.resolve`, which refuses absolute paths,
   `..` and symlinks out of the root.

@@ -101,7 +101,7 @@ class ShapeTests(unittest.TestCase):
     def test_every_xo_space_module_exists_and_loads_through_the_seam(self):
         for name in XO_SPACE_MODULES:
             with self.subTest(module=name):
-                self.assertEqual(list_capability_providers(name), ["claude_code"])
+                self.assertIn("claude_code", list_capability_providers(name))
                 load_capability(name, agent="claude_code")
 
 

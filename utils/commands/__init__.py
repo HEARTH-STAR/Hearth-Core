@@ -1,9 +1,10 @@
 """The single external-command executor.
 
-Every subprocess HEARTH starts goes through :func:`run`: an argv list (never a
-string, never ``shell=True``), stdin closed unless ``input`` is given so nothing
-can hang on a prompt, a timeout that kills the whole process group (so
-grandchildren die too), and secrets redacted from anything logged.
+Every subprocess HEARTH starts goes through :func:`run` (or :func:`spawn`, when
+its output is read as it is written): an argv list (never a string, never
+``shell=True``), stdin closed unless ``input`` is given so nothing can hang on a
+prompt, a timeout that kills the whole process group (so grandchildren die too),
+and secrets redacted from anything logged.
 
 Shape mirrors xo-space ``utils/commands`` (``CommandResult``, ``run``,
 ``safe_arg``) so call sites read the same in both codebases.
@@ -18,7 +19,8 @@ import re
 import signal
 import sys
 import time
-from collections.abc import Sequence
+from collections import deque
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -181,3 +183,127 @@ async def run(
         time.monotonic() - started,
         stderr=(err or b"").decode(errors="replace") if separate_stderr else "",
     )
+
+
+# ── Streaming ────────────────────────────────────────────────────────────────
+
+# Agent CLIs print one JSON event per line, and one event can hold a whole file or command output.
+STREAM_LINE_LIMIT = 32 * 1024 * 1024
+
+
+class Spawned:
+    """A running command whose stdout is read line by line as it is written (see :func:`spawn`).
+
+    stderr is drained in the background (an unread pipe stops the child once it fills) and only its
+    tail is kept. ``async with`` kills the whole process group on exit, so a reader that stops early
+    never leaves the command running.
+    """
+
+    def __init__(self, argv: list[str], proc: asyncio.subprocess.Process | None, *,
+                 binary_missing: bool = False, exception: str | None = None, stderr_limit: int = 8192):
+        self.argv = argv
+        self.process = proc
+        self.binary_missing = binary_missing
+        self.exception = exception
+        self._stderr: deque[bytes] = deque()
+        self._stderr_size = 0
+        self._stderr_limit = stderr_limit
+        self._drain: asyncio.Task | None = None
+        if proc is not None and proc.stderr is not None:
+            self._drain = asyncio.create_task(self._drain_stderr(proc.stderr))
+
+    async def _drain_stderr(self, stream: asyncio.StreamReader) -> None:
+        while chunk := await stream.read(4096):
+            self._stderr.append(chunk)
+            self._stderr_size += len(chunk)
+            while self._stderr_size > self._stderr_limit and len(self._stderr) > 1:
+                self._stderr_size -= len(self._stderr.popleft())
+
+    @property
+    def returncode(self) -> int | None:
+        return self.process.returncode if self.process is not None else -1
+
+    @property
+    def stderr_tail(self) -> str:
+        return b"".join(self._stderr).decode(errors="replace")[-self._stderr_limit:]
+
+    async def lines(self) -> AsyncIterator[bytes]:
+        """stdout, one line at a time (newline kept), until the command closes it."""
+        if self.process is None or self.process.stdout is None:
+            return
+        while line := await self.process.stdout.readline():
+            yield line
+
+    async def wait(self) -> int:
+        if self.process is None:
+            return -1
+        code = await self.process.wait()
+        if self._drain is not None:
+            await asyncio.gather(self._drain, return_exceptions=True)
+        return code
+
+    def kill(self) -> None:
+        if self.process is not None and self.process.returncode is None:
+            _kill_tree(self.process)
+
+    async def __aenter__(self) -> Spawned:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        self.kill()
+        await self.wait()
+
+
+async def spawn(
+    argv: Sequence[str],
+    *,
+    cwd: str | Path | None = None,
+    env: dict[str, str] | None = None,
+    unset_env: Sequence[str] = (),
+    input: bytes | str | None = None,
+    merge_stderr: bool = False,
+    stderr_limit: int = 8192,
+    user: str | None = None,
+) -> Spawned:
+    """Start a command and return it running, for output read as it is written. Never raises for process failures.
+
+    The streaming counterpart of :func:`run`, with the same rules: an argv list, stdin closed unless
+    ``input`` is given (then written and closed), its own process group, and only the redacted argv
+    logged. ``merge_stderr`` folds stderr into the stdout lines; ``user`` runs the command as that
+    user (POSIX). A command that could not start comes back with ``binary_missing`` or ``exception``
+    set and no lines.
+    """
+    argv = [str(a) for a in argv]
+    log.debug("spawn %s", redact_argv(argv))
+    full_env = {**os.environ, **(env or {})}
+    for key in unset_env:
+        full_env.pop(key, None)
+    full_env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    kwargs: dict[str, Any] = {"start_new_session": True} if sys.platform != "win32" else {}
+    if user and sys.platform != "win32":
+        kwargs["user"] = user
+    data = input.encode() if isinstance(input, str) else input
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=str(cwd) if cwd else None,
+            env=full_env,
+            stdin=asyncio.subprocess.PIPE if data is not None else asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT if merge_stderr else asyncio.subprocess.PIPE,
+            limit=STREAM_LINE_LIMIT,
+            **kwargs,
+        )
+    except FileNotFoundError:
+        return Spawned(argv, None, binary_missing=True)
+    except OSError as exc:
+        return Spawned(argv, None, exception=str(exc))
+    if data is not None and proc.stdin is not None:
+        try:
+            proc.stdin.write(data)
+            await proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            proc.stdin.close()
+    return Spawned(argv, proc, stderr_limit=stderr_limit)

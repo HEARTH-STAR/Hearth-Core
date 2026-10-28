@@ -42,7 +42,7 @@ class RegistryTests(unittest.TestCase):
         agent = get_active_agent()
         self.assertEqual(agent.name, "claude_code")
         self.assertFalse(agent.flag("dangerously_skip_permissions"))
-        self.assertEqual(list_adapters(), ["claude_code"])
+        self.assertEqual(list_adapters(), ["antigravity", "claude_code", "cursor"])
         self.assertIsInstance(get_adapter("claude_code", {}), ClaudeCodeAdapter)
         with self.assertRaises(ValueError):
             get_adapter("opencode", {})

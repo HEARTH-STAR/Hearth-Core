@@ -71,23 +71,35 @@ async def claude_oauth_connected(timeout: float = DEFAULT_TIMEOUT_SECONDS) -> bo
 async def build_providers_status(
     agent: str,
     *,
-    anthropic_key_present: Callable[[], bool],
-    llm_gateway_present: Callable[[], bool],
+    anthropic_key_present: Callable[[], bool] = lambda: False,
+    llm_gateway_present: Callable[[], bool] = lambda: False,
     claude_oauth_present: Callable[[], bool] | None = None,
+    oauth_present: dict[str, Callable[[], bool]] | None = None,
+    api_keys_present: dict[str, Callable[[], bool]] | None = None,
 ) -> dict[str, Any]:
-    """Compose the ``/providers/status`` response for ``agent``. Disabled providers are omitted."""
+    """Compose the ``/providers/status`` response for ``agent``. Disabled providers are omitted.
+
+    ``oauth_present`` / ``api_keys_present`` add the tiles of agents other than Claude Code (e.g.
+    ``{"cursor": ...}``), each still gated by ``capabilities.json``.
+    """
     models = _read_models_capabilities(agent)
 
     oauth: dict[str, dict] = {}
     if _leaf_enabled(models, "oauth", "claude_code"):
         connected = claude_oauth_present() if claude_oauth_present is not None else await claude_oauth_connected()
         oauth["claude_code"] = {"connected": bool(connected)}
+    for name, present in (oauth_present or {}).items():
+        if _leaf_enabled(models, "oauth", name):
+            oauth[name] = {"connected": bool(present())}
 
     api_keys: dict[str, dict] = {}
     if _leaf_enabled(models, "api_keys", "anthropic"):
         api_keys["anthropic"] = {"connected": bool(anthropic_key_present())}
     if _leaf_enabled(models, "api_keys", "llm_gateway"):
         api_keys["llm_gateway"] = {"connected": bool(llm_gateway_present())}
+    for name, present in (api_keys_present or {}).items():
+        if _leaf_enabled(models, "api_keys", name):
+            api_keys[name] = {"connected": bool(present())}
 
     return {"agent": agent, "oauth": oauth, "api_keys": api_keys}
 

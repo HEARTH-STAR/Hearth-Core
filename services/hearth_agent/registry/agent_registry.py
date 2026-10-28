@@ -12,10 +12,12 @@ Which manifest is active is resolved in this order:
 1. ``AGENT_NAME`` env var — runtime override (takes precedence when set).
 2. ``DEFAULT_AGENT`` env var — baseline default (what ships in ``.env.example``).
 3. If neither is set and only one manifest exists, that one is used.
-4. Otherwise loading raises — we do not guess.
+4. If neither is set, the one manifest that says ``"default": true`` is used.
+5. Otherwise loading raises — we do not guess.
 
-Shape mirrors xo-space ``registry/agent_registry.py``. HEARTH ships one agent
-(``claude_code``), so rule 3 normally applies.
+Shape mirrors xo-space ``registry/agent_registry.py``. HEARTH ships two agents
+(``claude_code``, ``cursor``); claude_code's manifest carries ``"default": true``,
+so a space whose environment names no agent runs Claude Code.
 """
 
 import json
@@ -135,10 +137,12 @@ def _ensure_loaded() -> None:
         _DEFAULT = _MANIFESTS[requested]
     elif len(_MANIFESTS) == 1:
         _DEFAULT = next(iter(_MANIFESTS.values()))
+    elif len(marked := [m for m in _MANIFESTS.values() if m.raw.get("default") is True]) == 1:
+        _DEFAULT = marked[0]
     else:
         raise ValueError(
             f"multiple agent manifests found ({', '.join(sorted(_MANIFESTS))}) "
-            "but neither AGENT_NAME nor DEFAULT_AGENT is set."
+            "but neither AGENT_NAME nor DEFAULT_AGENT is set, and not exactly one says \"default\": true."
         )
 
 

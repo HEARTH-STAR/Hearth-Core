@@ -1,0 +1,69 @@
+{
+  "name": "cursor",
+  "binary": "cursor-agent",
+  "install_url": "https://cursor.com/docs/cli/installation",
+  "home_dir": "~/.cursor",
+  "env_file": "~/.cursor/.env",
+  "config_file": "~/.cursor/cli-config.json",
+  "agents_dir": "~/.cursor/chats",
+  "workspace_dir": "~/.hearth/workspaces",
+  "provisioning_log": "~/.cursor/provisioning.log",
+  "precreate_home_for_skills": false,
+  "cwd": "~",
+  "cli_timeout_seconds": 2700,
+  "api": {
+    "session_header": ""
+  },
+  "model_prefix": "cursor",
+  "model": {
+    "default": "auto",
+    "env": "HEARTH_CURSOR_MODEL",
+    "allowed": ["auto"]
+  },
+  "mcp": {
+    "format": "json",
+    "path_in_project": ".cursor/mcp.json",
+    "server_name": "client"
+  },
+  "model_capabilities": {
+    "function_calling": true,
+    "vision": true,
+    "reasoning": true,
+    "json_output": true,
+    "max_context": 200000,
+    "max_output": 64000
+  },
+  "skills": {
+    "migration": null,
+    "adoption": null
+  },
+  "flags": {
+    "output_format": "stream-json",
+    "sandbox": "enabled",
+    "force": "edit_turns",
+    "trust_workspace": true
+  },
+  "runtime_setup": {
+    "installs_cli": true,
+    "install_script": "https://cursor.com/install",
+    "extra_mounts": [],
+    "session_globs": [
+      "chats/**/store.db",
+      "projects/*/agent-transcripts/**/*.jsonl"
+    ],
+    "secrets": [
+      {
+        "key": "CURSOR_API_KEY",
+        "label": "Cursor API key",
+        "description": "Signs the Cursor CLI in without an interactive login (Cursor dashboard → Integrations)."
+      }
+    ]
+  },
+  "providers": {
+    "cursor": {
+      "settings_env": {
+        "CURSOR_API_KEY": "{api_key}"
+      }
+    }
+  }
+}
