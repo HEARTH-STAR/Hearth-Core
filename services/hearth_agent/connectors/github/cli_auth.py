@@ -110,12 +110,14 @@ def _login_argv() -> list[str]:
     # `--insecure-storage`: the space container has no OS keyring, so gh keeps the
     # token in its own config file under the engine user's home on the space volume.
     # That file is gh's store, the only place the token lives.
+    # No `--skip-ssh-key`: gh offers an SSH key only for the ssh protocol, and the
+    # flag does not exist before gh 2.49 (Ubuntu's gh, in the space image, is 2.46),
+    # where it makes `gh auth login` exit with "unknown flag" before any device code.
     return [
         GH_BIN, "auth", "login",
         "--web",
         "--hostname", GITHUB_HOSTNAME,
         "--git-protocol", "https",
-        "--skip-ssh-key",
         "--insecure-storage",
     ]
 
