@@ -19,6 +19,7 @@ from .connectors.github_pat import router as github_pat_router
 from .models import router as models_router
 from .sessions import router as sessions_router
 from .usage import router as usage_router
+from .watch import router as watch_router
 from .workspace import router as workspace_router
 
 
@@ -38,6 +39,7 @@ all_routers: list[APIRouter] = [
     usage_router,
     *_active_agent_routes(),
     apidiff_router,
+    watch_router,
     github_pat_router,
     github_cli_router,
 ]

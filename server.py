@@ -29,6 +29,8 @@ from routers.hearth_agent import all_routers  # noqa: E402
 from routers.status import all_routers as status_routers  # noqa: E402
 from services.hearth_agent.adapters.loader import try_load_capability  # noqa: E402
 from services.hearth_agent.registry.agent_registry import get_active_agent  # noqa: E402
+from services.hearth_agent.watch.scheduler import enabled as watch_enabled  # noqa: E402
+from services.hearth_agent.watch.scheduler import get_scheduler  # noqa: E402
 
 log = logging.getLogger("hearth_core")
 REPO_ROOT = Path(__file__).resolve().parent
@@ -55,9 +57,14 @@ async def lifespan(app: FastAPI):
     telemetry = try_load_capability("session_telemetry")
     if telemetry is not None:
         telemetry.start_daemon()
+    watch = get_scheduler() if watch_enabled() else None
+    if watch is not None:
+        watch.start()
     try:
         yield
     finally:
+        if watch is not None:
+            await watch.stop()
         if telemetry is not None:
             telemetry.stop_daemon()
 

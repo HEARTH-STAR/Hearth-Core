@@ -110,7 +110,7 @@ class RepoMirror:
         await _check("set-url", _git("remote", "set-url", "origin", self.url, cwd=checkout_dir))
         await _check("checkout", _git("checkout", "-q", "-b", safe_arg(branch), safe_arg(base_commit), cwd=checkout_dir))
         patch_file = checkout_dir.parent / f".{checkout_dir.name}.patch"
-        patch_file.write_text(patch, encoding="utf-8")
+        patch_file.write_text(patch, encoding="utf-8", newline="")  # as is: no \r\n on Windows
         try:
             await _check("apply", _git("apply", "--index", "--whitespace=nowarn", str(patch_file), cwd=checkout_dir))
         finally:

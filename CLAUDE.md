@@ -3,7 +3,8 @@
 ## Project overview
 
 - FastAPI service that runs inside each HEARTH space (one Docker container on the customer's machine).
-- Holds three things: the GitHub connector (gh CLI), the API diff engine, and the agent adapters.
+- Holds four things: the GitHub connector (gh CLI), the API diff engine, the agent adapters, and the API watch
+  that ties them together (`services/hearth_agent/watch/`, routes `/api/watch*`).
 - Product docs: `../HEARTH_PRD.pdf`, `../HEARTH_TDD.pdf` (their engine services in Hearth-backend are not
   built; Hearth-backend only spins up containers today).
 - Three intelligences: Claude Code (`claude_code`, the default), Cursor's agent CLI (`cursor`) and Google
@@ -12,7 +13,7 @@
 ## Sibling repos (github.com/HEARTH-STAR, checked out side by side)
 
 - Hearth-frontend (`../Hearth-frontend`, :4310): the web app. Each of its Spaces is a container running this
-  service; it calls `/api/chat`, `/api/workspace/*`, `/api/connectors/{github,claude-code}/*` and `/health` at the
+  service; it calls `/api/chat`, `/api/workspace/*`, `/api/connectors/{github,claude-code}/*`, `/api/watch*` and `/health` at the
   port Docker published for the container's 5010.
 - Hearth-Core (this repo, :5010).
 - Hearth-backend (`../Hearth-backend`, :5020): spins up containers. Its `space` template clones this repo's
@@ -31,7 +32,29 @@
 - `server.py` pins the proactor event loop on Windows (`event_loop()`): with reload, uvicorn picks the selector
   loop, which cannot start subprocesses, and every gh, git and claude call would fail.
 - Every external command runs through `utils/commands` (`run` over an argv list, `safe_arg` for untrusted
-  values). No `shell=True`, no command strings.
+  values). No `shell=True`, no command strings. The one exception: a watch's `validate_commands` (the
+  owner's own build/test lines, like a CI file) run as `sh -c <line>` in a clean checkout
+  (`watch/validation.py`).
+
+## API watch (`services/hearth_agent/watch/`)
+
+- The scheduler (started in `server.py`'s lifespan; `HEARTH_API_WATCH=0` turns it off) ticks every 30 s:
+  due checks fetch each watched OpenAPI spec, diff it against the stored baseline with `apidiff`, and record a
+  detection for breaking changes. The detection id is the Change Record id: one breaking diff = one
+  detection = at most one PR (also checked on GitHub by branch name before pushing).
+- A fix runs one at a time: mirror sync → impact scan → baseline validation → the active agent edits an
+  export (its `finish` is gated on the watch's commands passing on a fresh checkout with only its diff) →
+  this code (never the agent) pushes `hearth/...` and opens the PR through `GhCli`.
+- State: `$HEARTH_STATE_DIR/watch/state.json` + spec snapshots in `watch/specs/`. Hearth-frontend keeps
+  no copy; it forwards `/api/spaces/:id/watch*` here.
+- Spec URLs resolving to private/loopback addresses are refused unless `HEARTH_WATCH_ALLOW_PRIVATE=1`.
+
+## Self-update (`services/update/core.py`, `/api/core/version`, `/api/core/update`)
+
+- A Space's Hearth-Core is a depth-1 clone of `main` in `/workspace/hearth-core`, not part of the image. Update =
+  fetch the branch, `reset --hard`, SIGTERM itself; the container's restart policy runs `hearth-space-start` again
+  (requirements reinstalled when they changed). Only `HEARTH_SELF_UPDATE=1` (the space template) enables it;
+  refused with local changes or while an API watch fix runs.
 
 ## Agent-modular architecture
 

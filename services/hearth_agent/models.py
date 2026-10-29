@@ -36,7 +36,7 @@ class ChangeSource(StrEnum):
 
 
 class PackageRef(BaseModel):
-    ecosystem: Literal["npm", "pypi"]
+    ecosystem: Literal["npm", "pypi", "openapi"]  # openapi: a watched spec URL; versions are its info.version
     name: str
     from_version: str | None = Field(default=None, alias="from")
     to_version: str | None = Field(default=None, alias="to")
