@@ -68,6 +68,101 @@ class OpenApiDiffTests(unittest.TestCase):
         self.assertTrue(cr.id.startswith("cr_") and cr.symbols)
         self.assertIsNone(to_change_record([], provider="x", package=PackageRef(ecosystem="npm", name="x")))
 
+    def test_enum_widening_is_not_breaking(self):
+        def spec(param_enum, field_enum):
+            return {"openapi": "3.0.0",
+                    "paths": {"/v1/x": {"get": {"parameters": [
+                        {"name": "type", "in": "query", "schema": {"type": "string", "enum": param_enum}},
+                        {"name": "reason", "in": "query", "schema": {"type": "string"}}]}}},
+                    "components": {"schemas": {"Obj": {"type": "object", "properties": {
+                        "status": {"type": "array", "items": {"type": "string", "enum": field_enum}}}}}}}
+
+        changes = diff_surfaces(extract_openapi(spec(["card", "sepa"], ["open"])),
+                                extract_openapi(spec(["card", "sepa", "upi"], ["open", "paid"])))
+        self.assertEqual([(c.type, c.detail, c.breaking) for c in changes], [
+            (ChangeType.ENUM_VALUES_ADDED, "type: +upi", False),
+            (ChangeType.ENUM_VALUES_ADDED, "status: +paid", False),
+        ])
+        cr = to_change_record(changes, provider="x", package=PackageRef(ecosystem="npm", name="x"),
+                              include_additions=True)
+        self.assertEqual(cr.kind, ChangeKind.FEATURE)
+
+        removed = diff_surfaces(extract_openapi(spec(["card", "sepa"], ["open"])),
+                                extract_openapi(spec(["card", "upi"], ["open"])))
+        self.assertEqual([(c.type, c.detail, c.breaking) for c in removed],
+                         [(ChangeType.PARAM_TYPE_CHANGED, "type: -sepa, +upi", True)])
+
+    def test_free_string_narrowed_to_enum_is_breaking(self):
+        def spec(schema):
+            return {"openapi": "3.0.0", "paths": {"/v1/x": {"post": {"parameters": [
+                {"name": "reason", "in": "query", "schema": schema}]}}}}
+
+        changes = diff_surfaces(extract_openapi(spec({"type": "string"})),
+                                extract_openapi(spec({"type": "string", "enum": ["fraud", "other"]})))
+        self.assertEqual([(c.type, c.breaking) for c in changes], [(ChangeType.PARAM_TYPE_CHANGED, True)])
+
+    def test_nested_request_params(self):
+        def spec(card_props, extra=None):
+            body = {"type": "object", "properties": {
+                "payment_method_options": {"type": "object", "properties": {
+                    # Stripe "emptyable" shape: an inline object, or "" to clear it
+                    "card": {"anyOf": [{"type": "object", "properties": card_props, "required": ["network"]},
+                                       {"type": "string", "enum": [""]}]}}},
+                "line_items": {"type": "array", "items": {"type": "object", "properties": {
+                    "price": {"type": "string"}, "tax_rates": {"type": "array", "items": {"type": "string"}}}}},
+                **(extra or {})}}
+            return {"openapi": "3.0.0", "paths": {"/v1/pi": {"post": {"requestBody": {"content": {
+                "application/x-www-form-urlencoded": {"schema": body}}}}}}}
+
+        old = spec({"network": {"type": "string"}, "moto": {"type": "boolean"}})
+        new = spec({"network": {"type": "string"}, "installments": {"type": "object", "required": ["plan"],
+                                                                    "properties": {"plan": {"type": "string"}}}},
+                   extra={"line_items": {"type": "array", "items": {"type": "object", "properties": {
+                       "price": {"type": "string"}}}}})
+        self.assertEqual([(c.type, c.detail) for c in diff_surfaces(extract_openapi(old), extract_openapi(new))], [
+            (ChangeType.PARAM_REMOVED, "payment_method_options.card.moto"),
+            (ChangeType.PARAM_REMOVED, "line_items[].tax_rates"),
+            # only the new parent object is reported, not its (required-within-it) child "plan"
+            (ChangeType.PARAM_ADDED_OPTIONAL, "payment_method_options.card.installments"),
+        ])
+
+    def test_renamed_or_superset_schema_refs_are_not_type_changes(self):
+        def spec(schemas, ref):
+            return {"openapi": "3.0.0", "paths": {}, "components": {"schemas": {
+                **schemas, "Charge": {"type": "object", "properties": {
+                    "details": {"$ref": f"#/components/schemas/{ref}"},
+                    "history": {"type": "array", "items": {"$ref": f"#/components/schemas/{ref}"}}}}}}}
+
+        card = {"type": "object", "required": ["brand"], "properties": {"brand": {"type": "string"},
+                                                                        "last4": {"type": "string"}}}
+        superset = {**card, "properties": {**card["properties"], "iin": {"type": "string"}}}
+        narrower = {"type": "object", "properties": {"brand": {"type": "string"}}}
+
+        renamed = diff_surfaces(extract_openapi(spec({"CardDetails": card}, "CardDetails")),
+                                extract_openapi(spec({"CardDetail": card}, "CardDetail")))
+        self.assertEqual([c.type for c in renamed], [ChangeType.RENAMED])  # no second "field type changed"
+
+        swapped = diff_surfaces(extract_openapi(spec({"Card": card}, "Card")),
+                                extract_openapi(spec({"Card": card, "RecordCard": superset}, "RecordCard")))
+        self.assertEqual([c.type for c in swapped], [ChangeType.ADDED])
+
+        narrowed = diff_surfaces(extract_openapi(spec({"Card": card}, "Card")),
+                                 extract_openapi(spec({"Card": card, "Slim": narrower}, "Slim")))
+        self.assertEqual([(c.type, c.detail) for c in narrowed if c.breaking], [
+            (ChangeType.FIELD_TYPE_CHANGED, "details: Card -> Slim"),
+            (ChangeType.FIELD_TYPE_CHANGED, "history: Card[] -> Slim[]"),
+        ])
+
+    def test_rejects_non_openapi_text(self):
+        for text in ("", "hello world", "a: [1, 2", "title: not a spec\n", "openapi: 3.0.0\npaths: [1, 2]\n"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                extract_openapi(text)
+
+    def test_long_single_line_spec_is_text_not_path(self):
+        import json
+        spec = {"openapi": "3.0.0", "paths": {f"/v1/r{i}": {"get": {}} for i in range(400)}}
+        self.assertEqual(len(extract_openapi(json.dumps(spec)).symbols), 400)
+
 
 class PythonDiffTests(unittest.TestCase):
     def test_diff_and_rename(self):

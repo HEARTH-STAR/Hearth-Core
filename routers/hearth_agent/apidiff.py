@@ -18,6 +18,7 @@ from apidiff import (
     extract_typescript,
     to_change_record,
 )
+from apidiff.openapi import parse_spec_text
 from services.hearth_agent.models import PackageRef
 
 router = APIRouter()
@@ -34,7 +35,7 @@ class DiffBody(BaseModel):
 
 def _extract(language: str, source: str, module: str):
     if language == "openapi":
-        return extract_openapi(source)
+        return extract_openapi(parse_spec_text(source))  # parse as text only; never read it as a server path
     if language == "python":
         return extract_python_module(source, module or "module")
     return extract_typescript(source, module)

@@ -64,6 +64,7 @@ class ChangeType(StrEnum):
     FIELD_REMOVED = "field_removed"
     FIELD_ADDED_REQUIRED = "field_added_required"
     FIELD_TYPE_CHANGED = "field_type_changed"
+    ENUM_VALUES_ADDED = "enum_values_added"  # widening an enum is additive, not breaking
 
 
 BREAKING_TYPES = {
