@@ -16,9 +16,12 @@
   },
   "model_prefix": "antigravity",
   "model": {
-    "default": "Gemini 3.5 Flash (Low)",
+    "default": "Gemini 3.8 Flash (Low)",
     "env": "HEARTH_ANTIGRAVITY_MODEL",
     "allowed": [
+      "Gemini 3.8 Flash (Low)",
+      "Gemini 3.8 Flash (Medium)",
+      "Gemini 3.8 Flash (High)",
       "Gemini 3.5 Flash (Low)",
       "Gemini 3.5 Flash (Medium)",
       "Gemini 3.5 Flash (High)",

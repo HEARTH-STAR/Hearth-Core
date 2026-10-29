@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import tempfile
 from collections import deque
@@ -38,12 +39,13 @@ from services.hearth_agent.engine import stream_events as se
 from services.hearth_agent.engine.chat_bridge import ToolResultBridge
 from services.hearth_agent.models import AgentResult, ChatSpec, JobSpec, Usage, ValidationResult
 from services.hearth_agent.policy import ToolPolicy
+from services.storage.paths import hearth_state_dir
 from utils.commands import spawn
 
 log = logging.getLogger(__name__)
 
 _BACKEND = "antigravity"
-_DEFAULT_MODEL = "Gemini 3.5 Flash (Low)"
+_DEFAULT_MODEL = "Gemini 3.8 Flash (Low)"
 POLL_SECONDS = 0.4
 
 Emit = Callable[[dict], Awaitable[None]]
@@ -55,6 +57,58 @@ _ACTIVITY_NAMES = {"run_command": "Bash", "write_to_file": "Edit", "replace_file
 _STEP_LABELS = {"RUN_COMMAND": se.RUNNING_COMMAND, "VIEW_FILE": "running view_file",
                 "GREP_SEARCH": "running grep_search", "CODEBASE_SEARCH": "running codebase_search",
                 "ERROR_MESSAGE": "running error recovery"}
+
+
+# ── Model choice ───────────────────────────────────────────────────────────────
+# agy's model names change between its versions and differ between Google accounts (one account is offered
+# "Gemini 3.5 Flash", another "Gemini 3.8 Flash"). The manifest allows every known name. When agy rejects the
+# one asked for, its error lists what this account has; the closest allowed name is used instead, and
+# remembered for the Space so later turns ask for it straight away.
+
+_MODEL_REJECTED = "invalid model selection"
+_OFFERED = "Available models:"
+_FAMILIES = ("flash", "pro", "sonnet", "opus")
+
+
+def _tier(name: str) -> str:
+    """``"Gemini 3.8 Flash (Low)"`` → ``"flash (low)"``: the family and effort a name keeps across versions."""
+    words = name.lower().split()
+    family = next((word for word in words if word in _FAMILIES), "")
+    effort = name[name.rfind("("):].lower() if "(" in name else ""
+    return f"{family} {effort}".strip()
+
+
+def pick_offered(output: str, allowed: list[str], rejected: str = "") -> str | None:
+    """When agy's ``output`` rejects a model, the allowed name it offers instead: the one with ``rejected``'s
+    family and effort, else the first allowed one offered. None when ``output`` is no rejection, or offers
+    none of ``allowed``."""
+    if _MODEL_REJECTED not in output or _OFFERED not in output:
+        return None
+    offered_text = output.split(_OFFERED, 1)[1]
+    offered = [name for name in allowed if name in offered_text and name != rejected]
+    same_tier = [name for name in offered if rejected and _tier(name) == _tier(rejected)]
+    return (same_tier or offered or [None])[0]
+
+
+def _remembered_model_file() -> Path:
+    return hearth_state_dir() / "antigravity-model"
+
+
+def remembered_model() -> str | None:
+    """The model this Space's agy last accepted after rejecting the one asked for, if any."""
+    try:
+        return _remembered_model_file().read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def remember_model(name: str) -> None:
+    path = _remembered_model_file()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(name + "\n", encoding="utf-8")
+    except OSError:
+        log.warning("could not remember the Antigravity model %s", name, exc_info=True)
 
 
 # ── Session index (as in claude_code/adapter.py; one row per job or chat) ─────
@@ -174,6 +228,7 @@ class Turn:
     max_steps: int | None = None
     env: dict[str, str] = field(default_factory=dict)
     run_as_user: str | None = None
+    model_retried: bool = False  # agy rejected ``model`` once and the run was retried with one it offered
 
 
 @dataclass
@@ -237,19 +292,33 @@ class AntigravityAdapter(BaseAgentAdapter):
     def _flags(self) -> dict[str, Any]:
         return self.commands.get("flags") or {}
 
-    def _catalog(self) -> tuple[set[str], str]:
+    def _allowed(self) -> list[str]:
+        """Every model name agy may be asked for, the default first: the order a fallback prefers."""
         model_cfg = self.commands.get("model") or {}
         default = str(model_cfg.get("default") or _DEFAULT_MODEL)
-        return {default, *(str(m) for m in model_cfg.get("allowed") or [])}, default
+        return list(dict.fromkeys([default, *(str(m) for m in model_cfg.get("allowed") or [])]))
+
+    def _catalog(self) -> tuple[set[str], str]:
+        allowed = self._allowed()
+        return set(allowed), allowed[0]
 
     def _model_for(self, requested: str | None) -> str:
-        """A name from agy's own catalog (``agy --model`` rejects anything else). ``requested`` may also be an
-        ``/api/models`` id (``antigravity/<name>``); anything unknown falls back to the default."""
+        """A name from agy's own catalog (``agy --model`` rejects anything else), in this order: the operator's
+        override (the manifest's ``model.env``, ``HEARTH_ANTIGRAVITY_MODEL``, used as given), ``requested``
+        (also as an ``/api/models`` id, ``antigravity/<name>``), the model this Space's agy last accepted
+        after a rejection, then the default."""
+        env_name = str((self.commands.get("model") or {}).get("env") or "")
+        override = os.environ.get(env_name, "").strip() if env_name else ""
+        if override:
+            return override
         catalog, default = self._catalog()
-        default = self.config.get("model") or default
         for candidate in (requested, (requested or "").rsplit("/", 1)[-1]):
             if candidate and candidate in catalog:
                 return candidate
+        remembered = remembered_model()
+        if remembered and remembered in catalog:
+            return remembered
+        default = self.config.get("model") or default
         return default if default in catalog else next(iter(sorted(catalog)))
 
     def _cli(self) -> list[str]:
@@ -369,6 +438,15 @@ class AntigravityAdapter(BaseAgentAdapter):
             state.steps += 1
             await emit(se.token(answer))
             return
+        # agy rejected the model: this account (or agy version) names its models differently. Run once more
+        # with the closest allowed one it offers, and remember it for the Space's later turns.
+        replacement = None if turn.model_retried else pick_offered("\n".join(output), self._allowed(), turn.model)
+        if replacement:
+            log.info("agy rejected model %r; retrying with %r", turn.model, replacement)
+            remember_model(replacement)
+            turn.model, turn.model_retried = replacement, True
+            await self._run_cli(turn, state, emit, run_dir, denials)
+            return
         # agy can print a failure to stdout with a non-zero exit, so stdout is never shown as a reply.
         state.failed = True
         detail = "\n".join(output)[-1000:]
@@ -436,17 +514,19 @@ class AntigravityAdapter(BaseAgentAdapter):
             await queue.put(event)
 
         async def produce() -> None:
-            nonlocal rounds, finished, out_of_rounds, summary, attention, last_validation
+            nonlocal rounds, finished, out_of_rounds, summary, attention, last_validation, model
             try:
                 message = build_task_message(job)
                 resume = resume_native
                 while True:
                     state.texts.clear()
-                    await self.run_turn(Turn(
+                    turn = Turn(
                         prompt=build_turn_prompt(MIGRATOR_RULES, "", message), workspace=workspace, model=model,
                         policy=hooks.policy, files=True, shell=True, resume=resume, max_steps=job.limits.max_steps,
                         env=dict(hooks.llm_env), run_as_user=hooks.run_as_user,
-                    ), state, emit)
+                    )
+                    await self.run_turn(turn, state, emit)
+                    model = turn.model  # a model picked from agy's offer carries on to the fix-up turns
                     if state.failed or state.budget_hit:
                         break
                     # The finish gate: the agent ended its turn; only an independent validation counts.
