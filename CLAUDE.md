@@ -90,6 +90,12 @@
 - Runs `agy -p <prompt> --model <name> --add-dir <workspace> --log-file <run log>` per turn (`cli.agy_binary()`:
   `AGY_CLI_PATH` → PATH → `~/.local/bin/agy`). Shape follows xo-space's antigravity adapter. agy ignores its cwd;
   `--add-dir` pins the workspace. `--model` takes only names from agy's catalog (manifest `model.allowed`).
+- Model names differ by agy version and by Google account (one is offered "Gemini 3.5 Flash", another "Gemini 3.8
+  Flash"), so `model.allowed` lists every known set. `_model_for` picks `HEARTH_ANTIGRAVITY_MODEL` (as given), the
+  requested name, the remembered one, then the default. When agy rejects the model ("invalid model selection"),
+  `pick_offered` takes the closest allowed name from its "Available models" list, the turn is retried once, and the
+  choice is remembered in `$HEARTH_STATE_DIR/antigravity-model`. Keep `model.allowed` in step with the agy version
+  Hearth-backend pins in `templates/space/install-agent-cli`.
 - No JSON output: the conversation id comes from the run's `--log-file` (never agy's caches), the run's
   `brain/<id>/.system_generated/logs/transcript_full.jsonl` is tailed for progress and `tool-call` events, and its
   last tool-less `PLANNER_RESPONSE` is the reply. Tokens are agy's own client-side estimates from

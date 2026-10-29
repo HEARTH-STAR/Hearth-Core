@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from services.hearth_agent.adapters.antigravity import adapter as adapter_mod
 from services.hearth_agent.adapters.antigravity import hooks as hooks_mod
 from services.hearth_agent.adapters.antigravity import login as login_mod
 from services.hearth_agent.adapters.antigravity import paths as paths_mod
@@ -37,6 +38,13 @@ FAKE_AGY = textwrap.dedent('''
     home = os.environ["FAKE_AGY_HOME"]
     with open(os.environ["FAKE_CALLS"], "a", encoding="utf-8") as f:
         f.write(json.dumps({"argv": args}) + "\\n")
+    offered = os.environ.get("FAKE_OFFERED")  # "A|B|C": the only models this account has, as agy rejects others
+    model = args[args.index("--model") + 1]
+    if offered and model not in offered.split("|"):
+        print('error: invalid model selection (--model "' + model + '" --effort ""): model ' + model
+              + " is not recognized as a known model or custom model in settings Available models: "
+              + " ".join(offered.split("|")))
+        sys.exit(1)
     prompt = args[args.index("-p") + 1]
     ws = args[args.index("--add-dir") + 1]
     cid = args[args.index("--conversation") + 1] if "--conversation" in args else "__CID__"
@@ -144,7 +152,8 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--add-dir") + 1], str(ws))
         self.assertEqual(argv[argv.index("--conversation") + 1], CID)
         self.assertEqual(adapter._model_for("antigravity/Gemini 3.1 Pro (High)"), "Gemini 3.1 Pro (High)")
-        self.assertEqual(adapter._model_for("main"), "Gemini 3.5 Flash (Low)")
+        with tempfile.TemporaryDirectory() as state, mock.patch.dict(os.environ, {"HEARTH_STATE_DIR": state}):
+            self.assertEqual(adapter._model_for("main"), "Gemini 3.8 Flash (Low)")
 
 
 class PolicyHookTests(unittest.TestCase):
@@ -315,6 +324,74 @@ class ChatTests(_Home, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.argvs()[1][self.argvs()[1].index("--conversation") + 1], CID)
         prompts = collect_session_prompts("chat:s1")
         self.assertEqual([p["text"] for p in prompts["prompts"]], ["fix it", "again"])
+
+
+# What agy prints when it does not know the model asked for (agy 1.4.9, an account offered Gemini 3.8 Flash).
+REJECTED_35 = ('error: invalid model selection (--model "Gemini 3.5 Flash (Low)" --effort ""): model Gemini 3.5 '
+               "Flash (Low) is not recognized as a known model or custom model in settings Available models: "
+               "Gemini 3.8 Flash (High) Gemini 3.8 Flash (Medium) Gemini 3.8 Flash (Low) Claude Sonnet 4.6 "
+               "(Thinking) Claude Opus 4.6 (Thinking) GPT-OSS 120B (Medium)")
+OFFERED_35 = "Gemini 3.5 Flash (Low)|Gemini 3.5 Flash (Medium)|Gemini 3.5 Flash (High)|Claude Sonnet 4.6 (Thinking)"
+
+
+def _model(argv: list[str]) -> str:
+    return argv[argv.index("--model") + 1]
+
+
+class ModelChoiceTests(_Home, unittest.IsolatedAsyncioTestCase):
+    """Accounts are offered different model names (Gemini 3.5 Flash for one, 3.8 Flash for another): both work."""
+
+    def test_picks_the_offered_model_closest_to_the_rejected_one(self):
+        allowed = AntigravityAdapter({})._allowed()
+        self.assertEqual(adapter_mod.pick_offered(REJECTED_35, allowed, "Gemini 3.5 Flash (Low)"),
+                         "Gemini 3.8 Flash (Low)")
+        high = REJECTED_35.replace('"Gemini 3.5 Flash (Low)"', '"Gemini 3.5 Flash (High)"')
+        self.assertEqual(adapter_mod.pick_offered(high, allowed, "Gemini 3.5 Flash (High)"), "Gemini 3.8 Flash (High)")
+        # The other way round: an account that only has 3.5 rejects 3.8.
+        only_35 = "error: invalid model selection ... Available models: " + " ".join(OFFERED_35.split("|"))
+        self.assertEqual(adapter_mod.pick_offered(only_35, allowed, "Gemini 3.8 Flash (Medium)"),
+                         "Gemini 3.5 Flash (Medium)")
+        # Not a rejection, or nothing HEARTH allows on offer: no pick.
+        self.assertIsNone(adapter_mod.pick_offered("error: network unreachable", allowed, "Gemini 3.8 Flash (Low)"))
+        self.assertIsNone(adapter_mod.pick_offered(
+            "invalid model selection ... Available models: Gemini 9 Ultra (Max)", allowed, "Gemini 3.8 Flash (Low)"))
+
+    def test_model_order_override_requested_remembered_default(self):
+        adapter = AntigravityAdapter({})
+        self.assertEqual(adapter._model_for(None), "Gemini 3.8 Flash (Low)")
+        adapter_mod.remember_model("Gemini 3.5 Flash (Medium)")
+        self.assertEqual(adapter_mod.remembered_model(), "Gemini 3.5 Flash (Medium)")
+        self.assertEqual(adapter._model_for(None), "Gemini 3.5 Flash (Medium)")
+        self.assertEqual(adapter._model_for("antigravity/Claude Opus 4.6 (Thinking)"), "Claude Opus 4.6 (Thinking)")
+        # The operator's override wins, even with a name the manifest does not list yet.
+        with mock.patch.dict(os.environ, {"HEARTH_ANTIGRAVITY_MODEL": "Gemini 9 Flash (Low)"}):
+            self.assertEqual(adapter._model_for("antigravity/Claude Opus 4.6 (Thinking)"), "Gemini 9 Flash (Low)")
+
+    async def test_a_rejected_model_is_retried_once_with_an_offered_one_and_remembered(self):
+        self.sign_in()
+        spec = ChatSpec(session="s1", message="fix it", system="persona",
+                        permissions=ChatPermissions(files=False, shell=False))
+        with mock.patch.dict(os.environ, {"FAKE_SCENARIO": "denied", "FAKE_OFFERED": OFFERED_35}):
+            events = [e async for e in AntigravityAdapter({}).chat(spec, self.ws, ToolResultBridge(5))]
+            self.assertEqual(events[-1]["result"]["status"], "completed")
+            self.assertFalse([e for e in events if e.get("type") == "error"])
+            self.assertEqual([_model(a) for a in self.argvs()], ["Gemini 3.8 Flash (Low)", "Gemini 3.5 Flash (Low)"])
+            self.assertEqual(adapter_mod.remembered_model(), "Gemini 3.5 Flash (Low)")
+            # The next turn asks for the remembered model straight away: no rejection, one call.
+            [e async for e in AntigravityAdapter({}).chat(spec.model_copy(update={"message": "again"}), self.ws,
+                                                          ToolResultBridge(5))]
+        self.assertEqual([_model(a) for a in self.argvs()][2:], ["Gemini 3.5 Flash (Low)"])
+
+    async def test_nothing_usable_on_offer_reports_the_error_without_looping(self):
+        self.sign_in()
+        spec = ChatSpec(session="s2", message="fix it", system="persona",
+                        permissions=ChatPermissions(files=False, shell=False))
+        with mock.patch.dict(os.environ, {"FAKE_OFFERED": "Gemini 9 Ultra (Max)"}):
+            events = [e async for e in AntigravityAdapter({}).chat(spec, self.ws, ToolResultBridge(5))]
+        errors = [e for e in events if e.get("type") == "error"]
+        self.assertTrue(errors and "invalid model selection" in errors[0]["error"])
+        self.assertEqual(len(self.argvs()), 1)
+        self.assertIsNone(adapter_mod.remembered_model())
 
 
 class LoginTests(_Home, unittest.IsolatedAsyncioTestCase):
