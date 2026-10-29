@@ -1,0 +1,39 @@
+{
+  "models": {
+    "enabled": true,
+    "oauth": {
+      "claude_code": { "enabled": false },
+      "cursor": { "enabled": true }
+    },
+    "api_keys": {
+      "enabled": true,
+      "anthropic": { "enabled": false },
+      "llm_gateway": { "enabled": false },
+      "cursor": { "enabled": true }
+    }
+  },
+  "data": {
+    "enabled": true,
+    "github": { "enabled": true },
+    "gitlab": { "enabled": false },
+    "bitbucket": { "enabled": false }
+  },
+  "jobs": {
+    "enabled": true,
+    "migration": { "enabled": true },
+    "adoption": { "enabled": false }
+  },
+  "apidiff": {
+    "enabled": true,
+    "openapi": { "enabled": true },
+    "python": { "enabled": true },
+    "typescript": { "enabled": true }
+  },
+  "channels": {
+    "enabled": false,
+    "slack": { "enabled": false },
+    "email": { "enabled": false }
+  },
+  "secrets": { "enabled": true },
+  "remote_control": { "enabled": false }
+}

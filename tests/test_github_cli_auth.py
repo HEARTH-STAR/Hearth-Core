@@ -121,6 +121,18 @@ class DeviceFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cli_auth._active, {})
 
 
+class LoginArgvTests(unittest.TestCase):
+    def test_uses_only_flags_the_space_images_gh_has(self):
+        # gh 2.46 (Ubuntu's, in the space image) exits with "unknown flag" on anything newer, before
+        # it prints a device code; --skip-ssh-key (gh 2.49+) once broke the sign-in that way.
+        gh_246_login_flags = {"--web", "--hostname", "--git-protocol", "--insecure-storage", "--scopes",
+                              "--with-token"}
+        argv = cli_auth._login_argv()
+        self.assertEqual(argv[:3], [cli_auth.GH_BIN, "auth", "login"])
+        self.assertLessEqual({a for a in argv if a.startswith("--")}, gh_246_login_flags)
+        self.assertEqual(argv[argv.index("--git-protocol") + 1], "https")  # no SSH key step to skip
+
+
 class DeviceFlowRouteTests(unittest.TestCase):
     def setUp(self):
         from server import app

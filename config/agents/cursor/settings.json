@@ -1,0 +1,6 @@
+{
+  "cli_path_env": "CURSOR_CLI_PATH",
+  "model_env": "HEARTH_CURSOR_MODEL",
+  "workspaces_root": "~/.hearth/workspaces",
+  "timeout": 2700
+}

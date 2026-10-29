@@ -1,0 +1,67 @@
+{
+  "name": "antigravity",
+  "binary": "agy",
+  "install_url": "https://antigravity.google/download",
+  "home_dir": "~/.gemini/antigravity-cli",
+  "env_file": "~/.gemini/antigravity-cli/.env",
+  "config_file": "~/.gemini/antigravity-cli/settings.json",
+  "agents_dir": "~/.gemini/antigravity-cli/brain",
+  "workspace_dir": "~/.hearth/workspaces",
+  "provisioning_log": "~/.gemini/antigravity-cli/provisioning.log",
+  "precreate_home_for_skills": false,
+  "cwd": "~",
+  "cli_timeout_seconds": 2700,
+  "api": {
+    "session_header": ""
+  },
+  "model_prefix": "antigravity",
+  "model": {
+    "default": "Gemini 3.5 Flash (Low)",
+    "env": "HEARTH_ANTIGRAVITY_MODEL",
+    "allowed": [
+      "Gemini 3.5 Flash (Low)",
+      "Gemini 3.5 Flash (Medium)",
+      "Gemini 3.5 Flash (High)",
+      "Gemini 3.1 Pro (Low)",
+      "Gemini 3.1 Pro (High)",
+      "Claude Sonnet 4.6 (Thinking)",
+      "Claude Opus 4.6 (Thinking)",
+      "GPT-OSS 120B (Medium)"
+    ]
+  },
+  "model_capabilities": {
+    "function_calling": true,
+    "vision": true,
+    "reasoning": true,
+    "json_output": false,
+    "max_context": 1000000,
+    "max_output": 16384
+  },
+  "skills": {
+    "migration": null,
+    "adoption": null
+  },
+  "auth": {
+    "token_file": "~/.gemini/antigravity-cli/antigravity-oauth-token",
+    "method": "consumer-oauth",
+    "note": "agy has no auth subcommand: login state is read from its self-refreshing token file, and a first login is the OAuth link a logged-out `agy -p` prints (login.py)."
+  },
+  "hooks": {
+    "file": "~/.gemini/config/hooks.json",
+    "note": "Hearth-Core installs one PreToolUse hook here (hooks.py) that applies HEARTH's tool policy to every agy tool call."
+  },
+  "flags": {
+    "dangerously_skip_permissions": false,
+    "tool_permission": "always-proceed",
+    "extra_allowed_tools": []
+  },
+  "runtime_setup": {
+    "installs_cli": false,
+    "extra_mounts": [],
+    "session_globs": [
+      "brain/**/*",
+      "conversations/*.db"
+    ],
+    "secrets": []
+  }
+}

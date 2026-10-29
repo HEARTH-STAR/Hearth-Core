@@ -123,7 +123,7 @@ class JobSpec(BaseModel):
     """What one remediation job hands to an intelligence."""
 
     job_id: str
-    intelligence: Literal["claude_code"] = "claude_code"
+    intelligence: Literal["claude_code", "cursor", "antigravity"] = "claude_code"
     model: str | None = None
     change_record: ChangeRecord
     impact_report: ImpactReport

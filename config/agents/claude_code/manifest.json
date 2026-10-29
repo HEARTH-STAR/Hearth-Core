@@ -1,5 +1,6 @@
 {
   "name": "claude_code",
+  "default": true,
   "binary": "claude",
   "install_url": "https://docs.claude.com/en/docs/claude-code/setup",
   "home_dir": "~/.claude",
