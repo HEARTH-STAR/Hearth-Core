@@ -17,6 +17,7 @@ from .chat import router as chat_router
 from .connectors.github_cli import router as github_cli_router
 from .connectors.github_pat import router as github_pat_router
 from .models import router as models_router
+from .repos import router as repos_router
 from .sessions import router as sessions_router
 from .usage import router as usage_router
 from .watch import router as watch_router
@@ -40,6 +41,7 @@ all_routers: list[APIRouter] = [
     *_active_agent_routes(),
     apidiff_router,
     watch_router,
+    repos_router,
     github_pat_router,
     github_cli_router,
 ]

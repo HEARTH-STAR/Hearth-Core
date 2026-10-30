@@ -52,6 +52,9 @@
   repo's dependency manifests from the mirror, matches `CATALOG` (providers with a public OpenAPI spec), makes one
   watch per provider (`packages` = its SDKs, used by the impact scan to match SDK calls) and derives the
   validation commands from the lockfile and scripts.
+- `/api/repos*` (`routers/hearth_agent/repos.py`, `watch/browse.py`) browse a watched repo read-only from its
+  bare mirror (summary, tree, blob, commits, commit patches, branches) for the web app's repo page; unwatched
+  repos answer 404 and the mirror is re-fetched at most every 2 minutes.
 
 ## Self-update (`services/update/core.py`, `/api/core/version`, `/api/core/update`)
 
