@@ -14,6 +14,7 @@ from typing import Any
 
 from services.hearth_agent.connectors.github.gh_api import GhCli
 from services.hearth_agent.connectors.github.repo import RepoMirror
+from services.hearth_agent.watch import checkout
 from services.storage.paths import hearth_state_dir
 from utils.commands import CommandResult, run, safe_arg
 
@@ -36,6 +37,12 @@ class BrowseError(RuntimeError):
         super().__init__(detail)
         self.status = status
         self.detail = detail
+
+
+def _watched_branch(repo: str) -> str | None:
+    from services.hearth_agent.watch.store import get_store
+
+    return next((w.base_branch for w in get_store().watches.values() if w.repo == repo and w.base_branch), None)
 
 
 def check_path(path: str) -> str:
@@ -80,6 +87,7 @@ class RepoBrowser:
                         raise BrowseError(502, f"Could not fetch {self.repo}: {str(exc)[:300]}") from exc
                     return last or datetime.now(UTC)
                 _synced[self.repo] = datetime.now(UTC)
+                await checkout.refresh(self.repo, _watched_branch(self.repo))
             return _synced[self.repo]
 
     async def resolve(self, ref: str | None) -> tuple[str, str]:

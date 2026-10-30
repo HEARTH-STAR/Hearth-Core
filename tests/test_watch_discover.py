@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from routers.hearth_agent import watch as watch_route
 from server import app
 from services.hearth_agent.connectors.github.repo import RepoMirror
-from services.hearth_agent.watch import discover, impact
+from services.hearth_agent.watch import checkout, discover, impact
 from services.hearth_agent.watch.scheduler import WatchScheduler
 from services.hearth_agent.watch.store import get_store
 
@@ -142,6 +142,15 @@ class RepoRouteTests(unittest.TestCase):
         again = self.client.post("/api/watch/repo", json={"repo": "acme/shop"}).json()
         self.assertEqual((again["watches"], len(again["existing"])), ([], 2))  # no duplicate watches
         self.assertEqual(len(get_store().watches), 2)
+
+        # The repo is checked out in the workspace (the Files tree, and what chat agents read) ...
+        self.assertEqual(out["checkout"], "repos/acme/shop")
+        dest = checkout.checkout_dir("acme/shop")
+        self.assertTrue((dest / "package.json").is_file())
+        # ... until its last watch goes.
+        for watch in out["watches"]:
+            self.assertEqual(self.client.delete(f"/api/watch/{watch['id']}").status_code, 204)
+        self.assertFalse(dest.exists())
 
     def test_errors(self):
         self.assertEqual(self.client.post("/api/watch/repo", json={"repo": "nope"}).status_code, 422)

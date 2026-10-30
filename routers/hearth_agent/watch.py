@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from services.hearth_agent.connectors.github.gh_api import GhCli
 from services.hearth_agent.connectors.github.repo import GitError
-from services.hearth_agent.watch import discover, review
+from services.hearth_agent.watch import checkout, discover, review
 from services.hearth_agent.watch.fixer import link_pull
 from services.hearth_agent.watch.models import RUNNING, Detection, RepoWatchInput, Watch, WatchInput, WatchPatch
 from services.hearth_agent.watch.scheduler import get_scheduler
@@ -126,8 +126,10 @@ async def watch_repo(body: RepoWatchInput) -> dict:
     store.save()
     for watch in created:
         get_scheduler().check_soon(watch)
+    await checkout.refresh(body.repo, body.base_branch)  # the mirror discover just fetched
     return {
         "branch": found.branch,
+        "checkout": checkout.relative_path(body.repo),
         "commit": found.commit,
         "providers": [{"id": e.provider.id, "name": e.provider.name, "packages": sorted(e.packages),
                        "files": sorted(e.files)} for e in found.found],
@@ -159,8 +161,11 @@ async def edit_watch(body: WatchPatch, watch_id: str = WATCH_ID) -> dict:
 
 @router.delete("/api/watch/{watch_id}", status_code=204)
 async def delete_watch(watch_id: str = WATCH_ID) -> Response:
-    _watch(watch_id)
-    get_store().remove_watch(watch_id)
+    repo = _watch(watch_id).repo
+    store = get_store()
+    store.remove_watch(watch_id)
+    if not any(w.repo == repo for w in store.watches.values()):
+        checkout.remove(repo)
     return Response(status_code=204)
 
 

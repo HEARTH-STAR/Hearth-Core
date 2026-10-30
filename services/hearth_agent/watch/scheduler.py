@@ -15,7 +15,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from services.hearth_agent.connectors.github.gh_api import GhCli
-from services.hearth_agent.watch import review
+from services.hearth_agent.watch import checkout, review
 from services.hearth_agent.watch.check import run_check
 from services.hearth_agent.watch.fixer import Fixer, link_pull
 from services.hearth_agent.watch.models import RUNNING, Watch
@@ -133,6 +133,9 @@ class WatchScheduler:
                 except Exception:
                     log.exception("check of watch %s failed", watch.id)
         await self.sync_pulls(store, now)
+        for repo, branch in {w.repo: w.base_branch for w in store.watches.values()}.items():
+            if not (checkout.checkout_dir(repo) / ".git").exists():
+                await checkout.refresh(repo, branch)
 
     async def sync_pulls(self, store: WatchStore, now: datetime, *, gh: GhCli | None = None) -> None:
         stale = now - timedelta(seconds=PR_SYNC_SECONDS)

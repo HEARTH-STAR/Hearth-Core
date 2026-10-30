@@ -29,6 +29,7 @@ from services.hearth_agent.connectors.github.pulls import branch_name, render_pr
 from services.hearth_agent.connectors.github.repo import GitError, RepoMirror
 from services.hearth_agent.engine.dispatcher import AgentDispatcher
 from services.hearth_agent.models import ImpactReport, JobSpec, ValidationCommandResult, ValidationResult
+from services.hearth_agent.watch import checkout as workspace_checkout
 from services.hearth_agent.watch import impact, review, validation
 from services.hearth_agent.watch.models import Detection, FixStatus, PullSummary, Watch
 from services.hearth_agent.watch.store import WatchStore
@@ -149,6 +150,7 @@ class Fixer:
             return
         mirror = RepoMirror(hearth_state_dir(), watch.repo)
         await mirror.sync()
+        await workspace_checkout.refresh(watch.repo, watch.base_branch)
         base = watch.base_branch or await mirror.default_branch()
         commit = await mirror.resolve(base)
 

@@ -55,6 +55,9 @@
 - `/api/repos*` (`routers/hearth_agent/repos.py`, `watch/browse.py`) browse a watched repo read-only from its
   bare mirror (summary, tree, blob, commits, commit patches, branches) for the web app's repo page; unwatched
   repos answer 404 and the mirror is re-fetched at most every 2 minutes.
+- Every watched repo is also checked out at `<workspace>/repos/<owner>/<name>` (`watch/checkout.py`), so it shows in
+  the Space's Files tree and chat agents can read it; it follows the mirror unless it has local edits, and goes
+  with the repo's last watch.
 
 ## Self-update (`services/update/core.py`, `/api/core/version`, `/api/core/update`)
 
