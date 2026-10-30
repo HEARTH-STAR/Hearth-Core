@@ -3,6 +3,7 @@ REST routes for the API watch: watched OpenAPI specs, their detections, and each
 
   GET    /api/watch                                  poller status, watches, detections
   POST   /api/watch                                  add a watch (its first check records the baseline)
+  POST   /api/watch/repo                             watch the APIs a repo uses (one watch per provider found)
   PATCH  /api/watch/{watch_id}                       edit / pause a watch
   DELETE /api/watch/{watch_id}                       remove a watch and its detections
   POST   /api/watch/{watch_id}/check                 check now
@@ -27,9 +28,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
 
 from services.hearth_agent.connectors.github.gh_api import GhCli
-from services.hearth_agent.watch import review
+from services.hearth_agent.connectors.github.repo import GitError
+from services.hearth_agent.watch import discover, review
 from services.hearth_agent.watch.fixer import link_pull
-from services.hearth_agent.watch.models import RUNNING, Detection, Watch, WatchInput, WatchPatch
+from services.hearth_agent.watch.models import RUNNING, Detection, RepoWatchInput, Watch, WatchInput, WatchPatch
 from services.hearth_agent.watch.scheduler import get_scheduler
 from services.hearth_agent.watch.store import get_store
 
@@ -92,6 +94,47 @@ async def add_watch(body: WatchInput) -> dict:
     store.save()
     get_scheduler().check_soon(watch)
     return _watch_view(watch)
+
+
+@router.post("/api/watch/repo", status_code=201)
+async def watch_repo(body: RepoWatchInput) -> dict:
+    """Read the repo through the Space's GitHub connection, find the API providers its dependencies name, and
+    watch each one's spec (fix PRs on by default). A provider already watched for this repo and branch is kept."""
+    try:
+        found = await discover.discover(body.repo, body.base_branch)
+    except discover.DiscoveryError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+    except GitError as exc:
+        raise HTTPException(400, detail=f"Could not read {body.repo}: {str(exc).removeprefix('git ')} "
+                                        "Check the name, and that the GitHub account connected in Setup can see it.") from exc
+    if not found.validate_commands:
+        raise HTTPException(422, detail=f"Could not work out how to build or test {body.repo}.")
+    store = get_store()
+    created: list[Watch] = []
+    existing: list[Watch] = []
+    for entry in found.found:
+        same = next((w for w in store.watches.values() if w.repo == body.repo and w.spec_url ==
+                     entry.provider.spec_url and w.base_branch == body.base_branch), None)
+        if same is not None:
+            existing.append(same)
+            continue
+        watch = Watch(id=f"w_{secrets.token_hex(6)}", name=entry.provider.name, spec_url=entry.provider.spec_url,
+                      repo=body.repo, base_branch=body.base_branch, validate_commands=found.validate_commands,
+                      packages=sorted(entry.packages), created_at=datetime.now(UTC))
+        store.watches[watch.id] = watch
+        created.append(watch)
+    store.save()
+    for watch in created:
+        get_scheduler().check_soon(watch)
+    return {
+        "branch": found.branch,
+        "commit": found.commit,
+        "providers": [{"id": e.provider.id, "name": e.provider.name, "packages": sorted(e.packages),
+                       "files": sorted(e.files)} for e in found.found],
+        "validate_commands": found.validate_commands,
+        "watches": [_watch_view(w) for w in created],
+        "existing": [_watch_view(w) for w in existing],
+    }
 
 
 @router.patch("/api/watch/{watch_id}")

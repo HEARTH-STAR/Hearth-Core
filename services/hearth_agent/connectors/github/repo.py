@@ -69,6 +69,17 @@ class RepoMirror:
         r = await _check("symbolic-ref", _git("--git-dir", str(self.mirror_dir), "symbolic-ref", "--short", "HEAD"))
         return r.stdout.strip()
 
+    async def list_files(self, commit: str) -> list[str]:
+        """Every file path in the tree at ``commit``, read from the mirror (no checkout)."""
+        r = await _check("ls-tree", _git("--git-dir", str(self.mirror_dir), "ls-tree", "-r", "--name-only",
+                                         safe_arg(commit)))
+        return [line for line in r.stdout.splitlines() if line]
+
+    async def read_file(self, commit: str, path: str) -> str | None:
+        """One file's text at ``commit``, or None when it is not there."""
+        r = await _git("--git-dir", str(self.mirror_dir), "show", f"{safe_arg(commit)}:{path}")
+        return r.stdout if r.ok else None
+
     async def export_tree(self, commit: str, dest: Path) -> None:
         """Write the tree at ``commit`` into ``dest`` with no remote and no credential.
 

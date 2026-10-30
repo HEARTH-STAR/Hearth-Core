@@ -156,7 +156,7 @@ class Fixer:
         for path in (ws, base_dir, check_dir):
             await asyncio.to_thread(_rmtree, path)
         await mirror.export_tree(commit, ws)
-        fix.impact = await asyncio.to_thread(impact.scan, ws, d.changes)
+        fix.impact = await asyncio.to_thread(impact.scan, ws, d.changes, watch.packages)
         if not fix.impact:
             self._step(d, "no_impact", f"No call sites of the changed endpoints or fields were found in "
                                        f"{watch.repo}@{base}, so there is nothing to fix.")

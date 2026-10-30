@@ -79,6 +79,15 @@ class WatchInput(BaseModel):
         return _commands(value)
 
 
+class RepoWatchInput(BaseModel):
+    """Watch the APIs a repo uses: HEARTH finds the providers, their specs and the validation commands."""
+
+    model_config = {"extra": "forbid"}
+
+    repo: str = Field(max_length=200, pattern=REPO_RE)
+    base_branch: str | None = Field(None, pattern=BRANCH_RE)
+
+
 class WatchPatch(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -106,6 +115,7 @@ class Watch(BaseModel):
     interval_minutes: int = 60
     auto_pr: bool = True
     enabled: bool = True
+    packages: list[str] = Field(default_factory=list)  # the SDKs the repo uses this provider through
     created_at: datetime
     status: WatchStatus = Field(default_factory=WatchStatus)
     history: list[WatchCheck] = Field(default_factory=list)

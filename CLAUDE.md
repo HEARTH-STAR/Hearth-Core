@@ -48,6 +48,10 @@
 - State: `$HEARTH_STATE_DIR/watch/state.json` + spec snapshots in `watch/specs/`. Hearth-frontend keeps
   no copy; it forwards `/api/spaces/:id/watch*` here.
 - Spec URLs resolving to private/loopback addresses are refused unless `HEARTH_WATCH_ALLOW_PRIVATE=1`.
+- `POST /api/watch/repo` ({repo, base_branch?}) is how the web app adds watches: `watch/discover.py` reads the
+  repo's dependency manifests from the mirror, matches `CATALOG` (providers with a public OpenAPI spec), makes one
+  watch per provider (`packages` = its SDKs, used by the impact scan to match SDK calls) and derives the
+  validation commands from the lockfile and scripts.
 
 ## Self-update (`services/update/core.py`, `/api/core/version`, `/api/core/update`)
 
